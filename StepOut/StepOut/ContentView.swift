@@ -10,6 +10,9 @@ struct ContentView: View {
 
     @State private var resultText = "Write your steps, then tap Check"
 
+    // Which row failed. nil means nothing is marked wrong yet.
+    @State private var wrongRow: Int?
+
     var body: some View {
         VStack(spacing: 20) {
             Text("StepOut")
@@ -33,6 +36,7 @@ struct ContentView: View {
 
             Text(resultText)
                 .multilineTextAlignment(.center)
+                .foregroundStyle(wrongRow == nil ? Color.primary : Color.red)
 
             Spacer()
         }
@@ -44,10 +48,18 @@ struct ContentView: View {
             ForEach(canvases.indices, id: \.self) { row in
                 NotebookRow(canvas: canvases[row])
                     .frame(height: 90)
+                    .background(wrongRow == row ? Color.red.opacity(0.1) : Color.clear)
                     .overlay(alignment: .bottom) {
                         Rectangle()
                             .fill(.gray.opacity(0.4))
                             .frame(height: 1)
+                    }
+                    .overlay {
+                        // Red outline only on the row that failed
+                        if wrongRow == row {
+                            Rectangle()
+                                .stroke(.red, lineWidth: 3)
+                        }
                     }
             }
         }
@@ -63,6 +75,7 @@ struct ContentView: View {
         for canvas in canvases {
             canvas.drawing = PKDrawing()
         }
+        wrongRow = nil
         resultText = "Write your steps, then tap Check"
     }
 
@@ -71,11 +84,15 @@ struct ContentView: View {
             let result = try await checkSteps(steps)
 
             if result.ok {
+                wrongRow = nil
                 resultText = "All steps look good!"
             } else {
-                resultText = "Step \(result.errorStep ?? 0): \(result.message ?? "")"
+                // The API counts steps from 1, but rows start at 0
+                wrongRow = (result.errorStep ?? 1) - 1
+                resultText = result.message ?? "Something doesn't follow."
             }
         } catch {
+            wrongRow = nil
             resultText = "Could not reach the server.\n\(error.localizedDescription)"
         }
     }
