@@ -2,3 +2,9 @@ backend/.venv/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Xcode personal settings
+xcuserdata/
+*.xcuserstate
+build/
+DerivedData/
