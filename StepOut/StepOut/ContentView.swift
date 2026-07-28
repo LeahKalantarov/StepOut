@@ -1,35 +1,69 @@
+import PencilKit
 import SwiftUI
 
 struct ContentView: View {
-    // Hardcoded for now. Step 3 is wrong on purpose.
+    // One canvas per step. Three lines of notebook paper.
+    @State private var canvases = [PKCanvasView(), PKCanvasView(), PKCanvasView()]
+
+    // Still hardcoded. Step C will read these from the handwriting.
     let steps = ["2x + 5 = 13", "2x = 8", "x = 5"]
 
-    @State private var resultText = "Tap Check to test the API"
+    @State private var resultText = "Write your steps, then tap Check"
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 20) {
             Text("StepOut")
                 .font(.largeTitle)
 
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(steps, id: \.self) { step in
-                    Text(step)
-                        .font(.title2)
-                }
-            }
+            notebook
 
-            Button("Check my work") {
-                Task {
-                    await runCheck()
+            HStack(spacing: 16) {
+                Button("Check my work") {
+                    Task {
+                        await runCheck()
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+
+                Button("Clear") {
+                    clearAll()
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
 
             Text(resultText)
                 .multilineTextAlignment(.center)
-                .padding()
+
+            Spacer()
         }
         .padding()
+    }
+
+    var notebook: some View {
+        VStack(spacing: 0) {
+            ForEach(canvases.indices, id: \.self) { row in
+                NotebookRow(canvas: canvases[row])
+                    .frame(height: 90)
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(.gray.opacity(0.4))
+                            .frame(height: 1)
+                    }
+            }
+        }
+        .background(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.gray.opacity(0.3))
+        }
+    }
+
+    func clearAll() {
+        for canvas in canvases {
+            canvas.drawing = PKDrawing()
+        }
+        resultText = "Write your steps, then tap Check"
     }
 
     func runCheck() async {
