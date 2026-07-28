@@ -1,8 +1,6 @@
-from sympy import Symbol, cancel, simplify
+from sympy import cancel, simplify
 
 from checker.parser import parse_equation
-
-x = Symbol("x")
 
 
 def move_everything_to_one_side(equation):
@@ -30,9 +28,10 @@ def same_equation(equation_a, equation_b):
     if side_a == 0 or side_b == 0:
         return side_a == side_b
 
-    # Example: (2x - 8) and (x - 4) are the same equation because x - 4 = (1/2)(2x - 8)
+    # Example: (2x - 8) and (x - 4) are the same equation because x - 4 = (1/2)(2x - 8).
+    # If dividing one by the other leaves a plain number, they match.
     ratio = cancel(side_b / side_a)
-    return not ratio.has(x)
+    return len(ratio.free_symbols) == 0
 
 
 def check_steps(steps):
