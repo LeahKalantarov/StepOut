@@ -14,6 +14,9 @@ struct ContentView: View {
     // Which row failed. nil means nothing is marked wrong yet.
     @State private var wrongRow: Int?
 
+    // True once the student has reached the answer, so we can say to stop.
+    @State private var isSolved = false
+
     // True while we wait on the server, so the button can't be tapped twice.
     @State private var isChecking = false
 
@@ -42,14 +45,16 @@ struct ContentView: View {
 
             Text(resultText)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(wrongRow == nil ? Color.primary : Color.red)
+                .foregroundStyle(resultColor)
 
             if !recognized.isEmpty {
                 VStack(spacing: 2) {
                     Text("Read as:")
                         .font(.caption)
-                    ForEach(recognized, id: \.self) { line in
-                        Text(line)
+                    // Keyed by position, not by text: two rows can easily read
+                    // the same, and duplicate ids confuse SwiftUI.
+                    ForEach(recognized.indices, id: \.self) { row in
+                        Text(recognized[row])
                             .font(.system(.caption, design: .monospaced))
                     }
                 }
@@ -59,6 +64,13 @@ struct ContentView: View {
             Spacer()
         }
         .padding()
+    }
+
+    // Red for a bad step, green once solved, plain otherwise.
+    var resultColor: Color {
+        if wrongRow != nil { return .red }
+        if isSolved { return .green }
+        return .primary
     }
 
     var notebook: some View {
@@ -94,6 +106,7 @@ struct ContentView: View {
             canvas.drawing = PKDrawing()
         }
         wrongRow = nil
+        isSolved = false
         recognized = []
         resultText = "Write your steps, then tap Check"
     }
@@ -103,6 +116,7 @@ struct ContentView: View {
         defer { isChecking = false }
 
         wrongRow = nil
+        isSolved = false
         recognized = []
         resultText = "Reading your handwriting..."
 
@@ -115,9 +129,18 @@ struct ContentView: View {
             recognized = result.recognized ?? []
 
             if result.ok {
-                resultText = recognized.isEmpty
-                    ? "Write some steps first."
-                    : "All steps look good!"
+                if recognized.isEmpty {
+                    resultText = "Write some steps first."
+                } else if result.solved == true {
+                    isSolved = true
+                    resultText = "Solved! \(result.answer ?? "")"
+
+                    if result.extraSteps == true {
+                        resultText += "\nYou can stop here — the rest isn't needed."
+                    }
+                } else {
+                    resultText = "Correct so far. Keep going."
+                }
             } else {
                 // The API counts rows from 1, but our array starts at 0
                 if let step = result.errorStep {

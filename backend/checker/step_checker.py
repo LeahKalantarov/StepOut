@@ -34,6 +34,22 @@ def same_equation(equation_a, equation_b):
     return len(ratio.free_symbols) == 0
 
 
+def is_solved(equation):
+    """
+    True when a step is a finished answer, like "x = 4".
+
+    That means one side is a lone variable and the other is just a number.
+    We accept either order, since "4 = x" is equally solved.
+    """
+    sides = [(equation.lhs, equation.rhs), (equation.rhs, equation.lhs)]
+
+    for variable_side, number_side in sides:
+        if variable_side.is_Symbol and len(number_side.free_symbols) == 0:
+            return True
+
+    return False
+
+
 def check_equations(equations, labels):
     """
     Compare each equation to the one above it and report the first bad line.
@@ -42,7 +58,7 @@ def check_equations(equations, labels):
     error message — the typed text, or the handwriting we recognized.
 
     Returns a dict like:
-      {"ok": True}
+      {"ok": True, "solved": True, "answer": "x = 4"}
     or
       {"ok": False, "error_step": 3, "message": "x = 5 doesn't follow from 2x = 8"}
     """
@@ -58,7 +74,24 @@ def check_equations(equations, labels):
                 "message": f"{labels[i]} doesn't follow from {labels[i - 1]}",
             }
 
-    return {"ok": True}
+    # Every step holds up. Has the student actually reached an answer yet?
+    solved_at = None
+    for i, equation in enumerate(equations):
+        if is_solved(equation):
+            solved_at = i
+            break
+
+    if solved_at is None:
+        return {"ok": True, "solved": False}
+
+    result = {"ok": True, "solved": True, "answer": labels[solved_at]}
+
+    # Writing more lines after the answer isn't wrong, but it is wasted work,
+    # so say so rather than staying silent.
+    if solved_at < len(equations) - 1:
+        result["extra_steps"] = True
+
+    return result
 
 
 def check_steps(steps):
