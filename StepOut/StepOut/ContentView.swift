@@ -5,13 +5,17 @@ struct ContentView: View {
     // One canvas per step. Three lines of notebook paper.
     @State private var canvases = [PKCanvasView(), PKCanvasView(), PKCanvasView()]
 
-    // Still hardcoded. Step C will read these from the handwriting.
-    let steps = ["2x + 5 = 13", "2x = 8", "x = 5"]
-
     @State private var resultText = "Write your steps, then tap Check"
+
+    // What the recognizer thought each row said, shown so the student can
+    // tell a math mistake apart from messy handwriting.
+    @State private var recognized: [String] = []
 
     // Which row failed. nil means nothing is marked wrong yet.
     @State private var wrongRow: Int?
+
+    // True while we wait on the server, so the button can't be tapped twice.
+    @State private var isChecking = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -21,22 +25,36 @@ struct ContentView: View {
             notebook
 
             HStack(spacing: 16) {
-                Button("Check my work") {
+                Button(isChecking ? "Checking..." : "Check my work") {
                     Task {
                         await runCheck()
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(isChecking)
 
                 Button("Clear") {
                     clearAll()
                 }
                 .buttonStyle(.bordered)
+                .disabled(isChecking)
             }
 
             Text(resultText)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(wrongRow == nil ? Color.primary : Color.red)
+
+            if !recognized.isEmpty {
+                VStack(spacing: 2) {
+                    Text("Read as:")
+                        .font(.caption)
+                    ForEach(recognized, id: \.self) { line in
+                        Text(line)
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                }
+                .foregroundStyle(.secondary)
+            }
 
             Spacer()
         }
@@ -76,23 +94,38 @@ struct ContentView: View {
             canvas.drawing = PKDrawing()
         }
         wrongRow = nil
+        recognized = []
         resultText = "Write your steps, then tap Check"
     }
 
     func runCheck() async {
+        isChecking = true
+        defer { isChecking = false }
+
+        wrongRow = nil
+        recognized = []
+        resultText = "Reading your handwriting..."
+
+        // Turn each row of ink into coordinates the server can read
+        let rows = canvases.map { $0.asRowData() }
+
         do {
-            let result = try await checkSteps(steps)
+            let result = try await checkHandwriting(rows)
+
+            recognized = result.recognized ?? []
 
             if result.ok {
-                wrongRow = nil
-                resultText = "All steps look good!"
+                resultText = recognized.isEmpty
+                    ? "Write some steps first."
+                    : "All steps look good!"
             } else {
-                // The API counts steps from 1, but rows start at 0
-                wrongRow = (result.errorStep ?? 1) - 1
+                // The API counts rows from 1, but our array starts at 0
+                if let step = result.errorStep {
+                    wrongRow = step - 1
+                }
                 resultText = result.message ?? "Something doesn't follow."
             }
         } catch {
-            wrongRow = nil
             resultText = "Could not reach the server.\n\(error.localizedDescription)"
         }
     }

@@ -34,22 +34,18 @@ def same_equation(equation_a, equation_b):
     return len(ratio.free_symbols) == 0
 
 
-def check_steps(steps):
+def check_equations(equations, labels):
     """
-    Walk through the student's steps and return info about the first bad line.
+    Compare each equation to the one above it and report the first bad line.
+
+    'equations' are SymPy objects. 'labels' are what to call each line in the
+    error message — the typed text, or the handwriting we recognized.
 
     Returns a dict like:
       {"ok": True}
     or
       {"ok": False, "error_step": 3, "message": "x = 5 doesn't follow from 2x = 8"}
     """
-    if len(steps) == 0:
-        return {"ok": True}
-
-    equations = []
-    for step in steps:
-        equations.append(parse_equation(step))
-
     # Step 1 is the starting equation, so we start comparing at step 2
     for i in range(1, len(equations)):
         previous_equation = equations[i - 1]
@@ -59,7 +55,18 @@ def check_steps(steps):
             return {
                 "ok": False,
                 "error_step": i + 1,
-                "message": f"{steps[i]} doesn't follow from {steps[i - 1]}",
+                "message": f"{labels[i]} doesn't follow from {labels[i - 1]}",
             }
 
     return {"ok": True}
+
+
+def check_steps(steps):
+    """
+    Check a list of typed steps like ["2x + 5 = 13", "2x = 8"].
+    """
+    if len(steps) == 0:
+        return {"ok": True}
+
+    equations = [parse_equation(step) for step in steps]
+    return check_equations(equations, steps)

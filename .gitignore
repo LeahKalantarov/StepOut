@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .DS_Store
 
+# API keys — never commit these
+.env
+
 # Xcode personal settings
 xcuserdata/
 *.xcuserstate

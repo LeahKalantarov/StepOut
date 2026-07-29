@@ -1,3 +1,10 @@
 sympy
 fastapi
 uvicorn
+
+# Talks to the MyScript handwriting service
+httpx
+python-dotenv
+
+# Lets SymPy read LaTeX (what MyScript gives us back)
+antlr4-python3-runtime==4.11
