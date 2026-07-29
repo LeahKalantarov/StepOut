@@ -73,6 +73,7 @@ def check_handwriting(request: HandwritingRequest):
 
             strokes = [{"x": s.x, "y": s.y} for s in row.strokes]
             latex = read_handwriting(strokes)
+            print(f"row {row_number + 1}: {len(row.strokes)} strokes -> {latex!r}")
 
             equations.append(parse_latex_equation(latex))
             recognized.append(latex)

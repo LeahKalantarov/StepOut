@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 
 import httpx
 from dotenv import load_dotenv
@@ -58,6 +59,35 @@ def build_request_body(strokes):
     }
 
 
+def settle_letter_case(latex_text):
+    """
+    Make a lone capital letter lowercase, so "X" and "x" mean one variable.
+
+    Handwritten x and X are the same shape, so the recognizer picks one at
+    random from row to row. SymPy would then treat "X = 4" as introducing a
+    brand new variable and call a correct step wrong. In school algebra the
+    two never mean different things, so we settle on lowercase.
+
+    Only single standalone letters change. LaTeX commands like \\frac keep
+    their spelling because the backslash protects them.
+    """
+    return re.sub(r"(?<!\\)\b([A-Z])\b", lambda match: match.group(1).lower(), latex_text)
+
+
+def tidy_spacing(latex_text):
+    """
+    Close up the gaps the recognizer leaves between characters.
+
+    MyScript hands back "2 x + 5 = 1 3" because it reports one symbol at a
+    time. Joining neighbouring digits and pulling a number against its
+    variable gives "2x + 5 = 13", which is what the student actually wrote.
+    Spaces around + - = are left alone since they aid reading.
+    """
+    text = re.sub(r"(?<=\d) +(?=\d)", "", latex_text)  # "1 3"  -> "13"
+    text = re.sub(r"(?<=\d) +(?=[a-z])", "", text)  # "2 x"  -> "2x"
+    return text
+
+
 def read_handwriting(strokes):
     """
     Send one row of strokes to MyScript and return the LaTeX it recognized.
@@ -92,4 +122,5 @@ def read_handwriting(strokes):
     if response.status_code != 200:
         raise ValueError(f"MyScript could not read that row: {response.text}")
 
-    return response.text.strip()
+    recognized = response.text.strip()
+    return tidy_spacing(settle_letter_case(recognized))
