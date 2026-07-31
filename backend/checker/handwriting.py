@@ -88,6 +88,28 @@ def tidy_spacing(latex_text):
     return text
 
 
+def heal_crossed_out_terms(latex_text):
+    """
+    Undo the fraction bar the recognizer invents from a cross-out.
+
+    When a student strikes through a term, MyScript sees a horizontal line and
+    reads it as a division bar with nothing on the other side: crossing out the
+    5 in "2x + 5 = 13" comes back as "2x + \\frac{5}{} = 13". Left alone that is
+    worse than useless, because SymPy quietly reads the half-empty fraction as
+    zero and the line becomes "2x = 13" — a wrong equation we would then judge
+    the student against.
+
+    So we put the struck term back. The cross-out is the student's bookkeeping;
+    what they are actually claiming shows up on the next line.
+
+    A real fraction always has both halves filled in, so this only ever fires
+    on a stray bar.
+    """
+    text = re.sub(r"\\frac\{([^{}]+)\}\{\}", r"\1", latex_text)  # \frac{5}{} -> 5
+    text = re.sub(r"\\frac\{\}\{([^{}]+)\}", r"\1", text)  # \frac{}{3} -> 3
+    return re.sub(r"\\frac\{\}\{\}", "", text)  # a bar and nothing else
+
+
 def read_handwriting(strokes):
     """
     Send one row of strokes to MyScript and return the LaTeX it recognized.
@@ -123,4 +145,4 @@ def read_handwriting(strokes):
         raise ValueError(f"MyScript could not read that row: {response.text}")
 
     recognized = response.text.strip()
-    return tidy_spacing(settle_letter_case(recognized))
+    return tidy_spacing(settle_letter_case(heal_crossed_out_terms(recognized)))

@@ -50,18 +50,29 @@ def is_solved(equation):
     return False
 
 
-def check_equations(equations, labels):
+def check_equations(equations, labels, problem_equation=None):
     """
     Compare each equation to the one above it and report the first bad line.
 
     'equations' are SymPy objects. 'labels' are what to call each line in the
     error message — the typed text, or the handwriting we recognized.
+    'problem_equation' is the question the student was asked, when there is
+    one, so we can catch a mis-copied first line.
 
     Returns a dict like:
       {"ok": True, "solved": True, "answer": "x = 4"}
     or
       {"ok": False, "error_step": 3, "message": "x = 5 doesn't follow from 2x = 8"}
     """
+    # A wrong first line makes every later step look wrong, so say what really
+    # happened instead of blaming step 2.
+    if problem_equation is not None and not same_equation(problem_equation, equations[0]):
+        return {
+            "ok": False,
+            "error_step": 1,
+            "message": f"{labels[0]} isn't the problem you were given.",
+        }
+
     # Step 1 is the starting equation, so we start comparing at step 2
     for i in range(1, len(equations)):
         previous_equation = equations[i - 1]
