@@ -1,16 +1,20 @@
 import PencilKit
 import SwiftUI
 
-// PencilKit is UIKit, so this wrapper lets SwiftUI use it.
-struct NotebookRow: UIViewRepresentable {
+/// One canvas covering the whole page, so you can write anywhere on it.
+///
+/// It is see-through on purpose: the ruled paper sits behind it and needs to
+/// stay visible.
+struct NotebookPage: UIViewRepresentable {
     let canvas: PKCanvasView
 
     func makeUIView(context: Context) -> PKCanvasView {
-        // .anyInput lets you draw with a mouse in the simulator, not just Pencil
         canvas.drawingPolicy = .anyInput
         canvas.tool = PKInkingTool(.pen, color: .black, width: 3)
-        canvas.backgroundColor = .white
-        canvas.isOpaque = true
+
+        canvas.backgroundColor = .clear
+        canvas.isOpaque = false
+
         return canvas
     }
 

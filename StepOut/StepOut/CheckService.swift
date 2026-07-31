@@ -24,6 +24,10 @@ struct RowData: Codable {
 
 struct HandwritingRequest: Codable {
     let rows: [RowData]
+
+    // Which problem the student is on, so the server can catch a first line
+    // that doesn't match the question.
+    let problemIndex: Int?
 }
 
 // MARK: - Talking to the server
@@ -55,7 +59,20 @@ func checkSteps(_ steps: [String]) async throws -> CheckResult {
 }
 
 /// Send handwriting to be read and checked.
-func checkHandwriting(_ rows: [RowData]) async throws -> CheckResult {
-    let body = try JSONEncoder().encode(HandwritingRequest(rows: rows))
+func checkHandwriting(_ rows: [RowData], problemIndex: Int?) async throws -> CheckResult {
+    let encoder = JSONEncoder()
+
+    // Turns problemIndex in Swift into "problem_index" in the JSON,
+    // which is the spelling the Python side expects.
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+
+    let body = try encoder.encode(HandwritingRequest(rows: rows, problemIndex: problemIndex))
     return try await post(path: "/check-handwriting", jsonBody: body)
+}
+
+/// Ask the server for one problem to show the student.
+func fetchProblem(at index: Int) async throws -> Problem {
+    let url = URL(string: serverAddress + "/problem/\(index)")!
+    let (data, _) = try await URLSession.shared.data(from: url)
+    return try JSONDecoder().decode(Problem.self, from: data)
 }

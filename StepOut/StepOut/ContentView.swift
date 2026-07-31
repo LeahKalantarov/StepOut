@@ -2,154 +2,181 @@ import PencilKit
 import SwiftUI
 
 struct ContentView: View {
-    // One canvas per step. Three lines of notebook paper.
-    @State private var canvases = [PKCanvasView(), PKCanvasView(), PKCanvasView()]
+    // The whole page is one canvas, so writing can go anywhere on it.
+    @State private var canvas = PKCanvasView()
 
-    @State private var resultText = "Write your steps, then tap Check"
+    // The question being worked on. nil until the server answers.
+    @State private var problem: Problem?
 
-    // What the recognizer thought each row said, shown so the student can
-    // tell a math mistake apart from messy handwriting.
-    @State private var recognized: [String] = []
+    @State private var resultText = ""
 
-    // Which row failed. nil means nothing is marked wrong yet.
-    @State private var wrongRow: Int?
+    // Which ruled line to mark, and whether the mark is a cross or a tick.
+    @State private var errorLine: Int?
+    @State private var solvedLine: Int?
 
-    // True once the student has reached the answer, so we can say to stop.
-    @State private var isSolved = false
+    // Lines the server passed over, so a surprising result can be explained.
+    @State private var skipped: [String] = []
 
     // True while we wait on the server, so the button can't be tapped twice.
     @State private var isChecking = false
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("StepOut")
-                .font(.largeTitle)
+        VStack(spacing: 0) {
+            page
+            toolbar
+        }
+        .task {
+            await loadProblem(at: 0)
+        }
+    }
 
-            notebook
+    // MARK: - The page
 
-            HStack(spacing: 16) {
-                Button(isChecking ? "Checking..." : "Check my work") {
-                    Task {
-                        await runCheck()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(isChecking)
+    var page: some View {
+        ZStack(alignment: .topLeading) {
+            RuledPaper()
 
-                Button("Clear") {
-                    clearAll()
-                }
-                .buttonStyle(.bordered)
-                .disabled(isChecking)
+            marginMarks
+
+            // The question, sitting on the first line until the AI writes it
+            if let problem {
+                Text("\(problem.prompt):  \(problem.equation)")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, NotebookLayout.marginWidth + 12)
+                    .padding(.top, 14)
             }
 
-            Text(resultText)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(resultColor)
+            NotebookPage(canvas: canvas)
+        }
+    }
 
-            if !recognized.isEmpty {
-                VStack(spacing: 2) {
-                    Text("Read as:")
-                        .font(.caption)
-                    // Keyed by position, not by text: two rows can easily read
-                    // the same, and duplicate ids confuse SwiftUI.
-                    ForEach(recognized.indices, id: \.self) { row in
-                        Text(recognized[row])
-                            .font(.system(.caption, design: .monospaced))
+    /// Ticks and crosses in the left margin, beside the line they refer to.
+    var marginMarks: some View {
+        ZStack(alignment: .topLeading) {
+            if let errorLine {
+                mark("✗", color: .red, onLine: errorLine)
+            }
+
+            if let solvedLine {
+                mark("✓", color: .green, onLine: solvedLine)
+            }
+        }
+    }
+
+    /// Place one mark in the margin, level with a given ruled line.
+    func mark(_ symbol: String, color: Color, onLine lineNumber: Int) -> some View {
+        Text(symbol)
+            .font(.title2.bold())
+            .foregroundStyle(color)
+            .padding(.leading, 18)
+            // Sit the mark just above the rule the writing rests on
+            .padding(.top, CGFloat(lineNumber) * NotebookLayout.lineHeight + 8)
+    }
+
+    // MARK: - The controls
+
+    var toolbar: some View {
+        HStack(spacing: 16) {
+            Button(isChecking ? "Checking..." : "Check my work") {
+                Task {
+                    await runCheck()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isChecking)
+
+            Button("Clear") {
+                clearPage()
+            }
+            .buttonStyle(.bordered)
+            .disabled(isChecking)
+
+            // Only offer the next problem once this one is finished
+            if solvedLine != nil, let problem, problem.index + 1 < problem.total {
+                Button("Next problem") {
+                    Task {
+                        await loadProblem(at: problem.index + 1)
                     }
                 }
-                .foregroundStyle(.secondary)
+                .buttonStyle(.bordered)
             }
 
             Spacer()
-        }
-        .padding()
-    }
 
-    // Red for a bad step, green once solved, plain otherwise.
-    var resultColor: Color {
-        if wrongRow != nil { return .red }
-        if isSolved { return .green }
-        return .primary
-    }
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(resultText)
+                    .foregroundStyle(errorLine == nil ? .secondary : Color.red)
 
-    var notebook: some View {
-        VStack(spacing: 0) {
-            ForEach(canvases.indices, id: \.self) { row in
-                NotebookRow(canvas: canvases[row])
-                    .frame(height: 90)
-                    .background(wrongRow == row ? Color.red.opacity(0.1) : Color.clear)
-                    .overlay(alignment: .bottom) {
-                        Rectangle()
-                            .fill(.gray.opacity(0.4))
-                            .frame(height: 1)
-                    }
-                    .overlay {
-                        // Red outline only on the row that failed
-                        if wrongRow == row {
-                            Rectangle()
-                                .stroke(.red, lineWidth: 3)
-                        }
-                    }
+                if !skipped.isEmpty {
+                    Text("Skipped: \(skipped.joined(separator: "   "))")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
-        .background(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(.gray.opacity(0.3))
+        .padding()
+        .background(.bar)
+    }
+
+    // MARK: - Actions
+
+    func loadProblem(at index: Int) async {
+        clearPage()
+
+        do {
+            problem = try await fetchProblem(at: index)
+        } catch {
+            resultText = "Could not load the problem."
         }
     }
 
-    func clearAll() {
-        for canvas in canvases {
-            canvas.drawing = PKDrawing()
-        }
-        wrongRow = nil
-        isSolved = false
-        recognized = []
-        resultText = "Write your steps, then tap Check"
+    func clearPage() {
+        canvas.drawing = PKDrawing()
+        errorLine = nil
+        solvedLine = nil
+        skipped = []
+        resultText = ""
     }
 
     func runCheck() async {
         isChecking = true
         defer { isChecking = false }
 
-        wrongRow = nil
-        isSolved = false
-        recognized = []
+        errorLine = nil
+        solvedLine = nil
+        skipped = []
         resultText = "Reading your handwriting..."
 
-        // Turn each row of ink into coordinates the server can read
-        let rows = canvases.map { $0.asRowData() }
+        // Bundle the page into lines, then send just the coordinates
+        let lines = canvas.writtenLines()
+        let rows = lines.map { RowData(strokes: $0.strokes) }
 
         do {
-            let result = try await checkHandwriting(rows)
+            let result = try await checkHandwriting(rows, problemIndex: problem?.index)
 
-            recognized = result.recognized ?? []
+            skipped = result.ignored ?? []
 
             if result.ok {
-                if recognized.isEmpty {
-                    resultText = "Write some steps first."
+                if lines.isEmpty {
+                    resultText = "Write the problem out first."
                 } else if result.solved == true {
-                    isSolved = true
+                    // Tick the last line that was written
+                    solvedLine = lines.last?.lineNumber
                     resultText = "Solved! \(result.answer ?? "")"
-
-                    if result.extraSteps == true {
-                        resultText += "\nYou can stop here — the rest isn't needed."
-                    }
                 } else {
                     resultText = "Correct so far. Keep going."
                 }
             } else {
-                // The API counts rows from 1, but our array starts at 0
-                if let step = result.errorStep {
-                    wrongRow = step - 1
+                // The server counts written lines from 1; turn that back into
+                // the ruled line it was actually written on.
+                if let step = result.errorStep, step - 1 < lines.count {
+                    errorLine = lines[step - 1].lineNumber
                 }
                 resultText = result.message ?? "Something doesn't follow."
             }
         } catch {
-            resultText = "Could not reach the server.\n\(error.localizedDescription)"
+            resultText = "Could not reach the server."
         }
     }
 }

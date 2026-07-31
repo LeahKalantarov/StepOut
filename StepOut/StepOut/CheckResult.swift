@@ -20,4 +20,9 @@ struct CheckResult: Codable {
 
     // True when there are more rows written after the answer
     let extraSteps: Bool?
+
+    // Lines that weren't equations, so they took no part in the check.
+    // Usually annotations like "-5  -5", or a cross-out the recognizer
+    // turned into nonsense. Shown so a surprising verdict is explainable.
+    let ignored: [String]?
 }
