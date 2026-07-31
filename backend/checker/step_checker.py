@@ -64,13 +64,15 @@ def check_equations(equations, labels, problem_equation=None):
     or
       {"ok": False, "error_step": 3, "message": "x = 5 doesn't follow from 2x = 8"}
     """
-    # A wrong first line makes every later step look wrong, so say what really
-    # happened instead of blaming step 2.
+    # The question is already on the page, so the student's first line is a
+    # first move, not a copy. Checking it against the question catches a bad
+    # opening step — and a wrong first line would otherwise make every line
+    # after it look wrong too, sending them hunting in the wrong place.
     if problem_equation is not None and not same_equation(problem_equation, equations[0]):
         return {
             "ok": False,
             "error_step": 1,
-            "message": f"{labels[0]} isn't the problem you were given.",
+            "message": f"{labels[0]} doesn't follow from the question.",
         }
 
     # Step 1 is the starting equation, so we start comparing at step 2

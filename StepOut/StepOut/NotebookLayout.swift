@@ -11,4 +11,16 @@ enum NotebookLayout {
 
     /// How far in the red margin rule sits.
     static let marginWidth: CGFloat = 56
+
+    /// Where writing rests on a given line: just above the rule, a little in
+    /// from the margin, the way you would start writing on real paper.
+    ///
+    /// Line 0 is the top line. StrokeReader numbers lines the same way, so a
+    /// line written here and a line read back there mean the same thing.
+    static func penStart(onLine lineNumber: Int) -> CGPoint {
+        CGPoint(
+            x: marginWidth + 16,
+            y: CGFloat(lineNumber + 1) * lineHeight - 12
+        )
+    }
 }

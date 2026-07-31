@@ -38,13 +38,19 @@ struct ContentView: View {
 
             marginMarks
 
-            // The question, sitting on the first line until the AI writes it
+            // The question, written onto the page a stroke at a time: what to
+            // do, then the equation underneath once that line is finished.
             if let problem {
-                Text("\(problem.prompt):  \(problem.equation)")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, NotebookLayout.marginWidth + 12)
-                    .padding(.top, 14)
+                HandwrittenLine(
+                    text: problem.prompt,
+                    origin: NotebookLayout.penStart(onLine: 0)
+                )
+
+                HandwrittenLine(
+                    text: problem.equation,
+                    origin: NotebookLayout.penStart(onLine: 1),
+                    delay: HandwrittenLine.writingTime(for: problem.prompt) + 0.25
+                )
             }
 
             NotebookPage(canvas: canvas)
@@ -159,7 +165,7 @@ struct ContentView: View {
 
             if result.ok {
                 if lines.isEmpty {
-                    resultText = "Write the problem out first."
+                    resultText = "Write your first step underneath."
                 } else if result.solved == true {
                     // Tick the last line that was written
                     solvedLine = lines.last?.lineNumber
