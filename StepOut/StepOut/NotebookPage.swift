@@ -6,11 +6,10 @@ import SwiftUI
 /// It is see-through on purpose: the ruled paper sits behind it and needs to
 /// stay visible.
 struct NotebookPage: UIViewRepresentable {
-    let canvas: PKCanvasView
+    let canvas: NotebookCanvas
 
-    func makeUIView(context: Context) -> PKCanvasView {
+    func makeUIView(context: Context) -> NotebookCanvas {
         canvas.drawingPolicy = .anyInput
-        canvas.tool = PKInkingTool(.pen, color: .black, width: 3)
 
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
@@ -18,5 +17,5 @@ struct NotebookPage: UIViewRepresentable {
         return canvas
     }
 
-    func updateUIView(_ uiView: PKCanvasView, context: Context) {}
+    func updateUIView(_ uiView: NotebookCanvas, context: Context) {}
 }

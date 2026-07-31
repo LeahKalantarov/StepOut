@@ -3,30 +3,86 @@ import SwiftUI
 
 struct ContentView: View {
     // The whole page is one canvas, so writing can go anywhere on it.
-    @State private var canvas = PKCanvasView()
+    @State private var canvas = NotebookCanvas()
 
-    // The question being worked on. nil until the server answers.
-    @State private var problem: Problem?
+    @State private var problems: [Problem] = []
+    @State private var currentIndex = 0
 
-    @State private var resultText = ""
+    // Which questions have been finished, for the ticks in the sidebar.
+    @State private var solvedProblems: Set<Int> = []
 
     // Which ruled line to mark, and whether the mark is a cross or a tick.
     @State private var errorLine: Int?
     @State private var solvedLine: Int?
 
-    // Lines the server passed over, so a surprising result can be explained.
-    @State private var skipped: [String] = []
+    @State private var feedback: Feedback?
 
-    // True while we wait on the server, so the button can't be tapped twice.
+    // True while we wait on the server, so Check can't be tapped twice. Only
+    // Check: a check is allowed half a minute, and Clear has to keep working
+    // for the whole of it.
     @State private var isChecking = false
 
+    // The check on its way to the server, kept so clearing the page can call
+    // it off.
+    @State private var checkTask: Task<Void, Never>?
+
+    // Counts down to hiding the feedback note.
+    @State private var feedbackTask: Task<Void, Never>?
+
+    private var problem: Problem? {
+        problems.indices.contains(currentIndex) ? problems[currentIndex] : nil
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
+        NavigationSplitView {
+            sidebar
+        } detail: {
             page
-            toolbar
         }
         .task {
-            await loadProblem(at: 0)
+            await loadProblems()
+        }
+    }
+
+    // MARK: - The list of questions
+
+    var sidebar: some View {
+        List {
+            Section("Questions") {
+                ForEach(problems) { problem in
+                    Button {
+                        select(problem)
+                    } label: {
+                        row(for: problem)
+                    }
+                    .listRowBackground(
+                        problem.index == currentIndex
+                            ? Color.accentColor.opacity(0.12)
+                            : Color.clear
+                    )
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .navigationTitle("StepOut")
+    }
+
+    func row(for problem: Problem) -> some View {
+        HStack(spacing: 12) {
+            Text("\(problem.index + 1)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 14, alignment: .trailing)
+
+            Text(problem.equation)
+                .foregroundStyle(.primary)
+
+            Spacer()
+
+            if solvedProblems.contains(problem.index) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
         }
     }
 
@@ -55,6 +111,47 @@ struct ContentView: View {
 
             NotebookPage(canvas: canvas)
         }
+        .overlay(alignment: .top) {
+            if let feedback {
+                FeedbackNote(feedback: feedback)
+                    .padding(.top, 24)
+                    // Never swallow a pen stroke aimed at the page beneath it.
+                    .allowsHitTesting(false)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                if !problems.isEmpty {
+                    Text("\(currentIndex + 1) of \(problems.count)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.quaternary, in: Capsule())
+                }
+            }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Clear page", systemImage: "arrow.counterclockwise") {
+                    clearPage()
+                }
+                .labelStyle(.iconOnly)
+            }
+
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    checkTask = Task {
+                        await runCheck()
+                    }
+                } label: {
+                    Label(isChecking ? "Checking" : "Check", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isChecking)
+            }
+        }
     }
 
     /// Ticks and crosses in the left margin, beside the line they refer to.
@@ -80,69 +177,59 @@ struct ContentView: View {
             .padding(.top, CGFloat(lineNumber) * NotebookLayout.lineHeight + 8)
     }
 
-    // MARK: - The controls
-
-    var toolbar: some View {
-        HStack(spacing: 16) {
-            Button(isChecking ? "Checking..." : "Check my work") {
-                Task {
-                    await runCheck()
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(isChecking)
-
-            Button("Clear") {
-                clearPage()
-            }
-            .buttonStyle(.bordered)
-            .disabled(isChecking)
-
-            // Only offer the next problem once this one is finished
-            if solvedLine != nil, let problem, problem.index + 1 < problem.total {
-                Button("Next problem") {
-                    Task {
-                        await loadProblem(at: problem.index + 1)
-                    }
-                }
-                .buttonStyle(.bordered)
-            }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(resultText)
-                    .foregroundStyle(errorLine == nil ? .secondary : Color.red)
-
-                if !skipped.isEmpty {
-                    Text("Skipped: \(skipped.joined(separator: "   "))")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .padding()
-        .background(.bar)
-    }
-
     // MARK: - Actions
 
-    func loadProblem(at index: Int) async {
-        clearPage()
-
+    func loadProblems() async {
         do {
-            problem = try await fetchProblem(at: index)
+            problems = try await fetchProblems()
         } catch {
-            resultText = "Could not load the problem."
+            show(Feedback(text: "Could not reach the server.", tone: .bad))
         }
+    }
+
+    func select(_ problem: Problem) {
+        currentIndex = problem.index
+        clearPage()
     }
 
     func clearPage() {
+        // A check already on its way would come back and mark writing that is
+        // about to be wiped, so call it off first.
+        checkTask?.cancel()
+
         canvas.drawing = PKDrawing()
         errorLine = nil
         solvedLine = nil
-        skipped = []
-        resultText = ""
+        hideFeedback()
+    }
+
+    /// Show a note over the page, and take it away again once it has been read.
+    func show(_ newFeedback: Feedback) {
+        feedbackTask?.cancel()
+
+        withAnimation(.snappy) {
+            feedback = newFeedback
+        }
+
+        // The cross in the margin is the lasting record of a mistake, so these
+        // words don't have to sit there forever explaining themselves.
+        feedbackTask = Task {
+            try? await Task.sleep(for: .seconds(6))
+
+            if !Task.isCancelled {
+                withAnimation(.snappy) {
+                    feedback = nil
+                }
+            }
+        }
+    }
+
+    func hideFeedback() {
+        feedbackTask?.cancel()
+
+        withAnimation(.snappy) {
+            feedback = nil
+        }
     }
 
     func runCheck() async {
@@ -151,8 +238,7 @@ struct ContentView: View {
 
         errorLine = nil
         solvedLine = nil
-        skipped = []
-        resultText = "Reading your handwriting..."
+        hideFeedback()
 
         // Bundle the page into lines, then send just the coordinates
         let lines = canvas.writtenLines()
@@ -161,17 +247,22 @@ struct ContentView: View {
         do {
             let result = try await checkHandwriting(rows, problemIndex: problem?.index)
 
-            skipped = result.ignored ?? []
+            // The page was cleared while we waited, so this verdict is about
+            // writing that is no longer on it.
+            if Task.isCancelled { return }
+
+            let skipped = result.ignored ?? []
 
             if result.ok {
                 if lines.isEmpty {
-                    resultText = "Write your first step underneath."
+                    show(Feedback(text: "Write your first step underneath.", tone: .plain))
                 } else if result.solved == true {
                     // Tick the last line that was written
                     solvedLine = lines.last?.lineNumber
-                    resultText = "Solved! \(result.answer ?? "")"
+                    solvedProblems.insert(currentIndex)
+                    show(Feedback(text: "Solved. \(result.answer ?? "")", tone: .good, skipped: skipped))
                 } else {
-                    resultText = "Correct so far. Keep going."
+                    show(Feedback(text: "Correct so far. Keep going.", tone: .plain, skipped: skipped))
                 }
             } else {
                 // The server counts written lines from 1; turn that back into
@@ -179,10 +270,19 @@ struct ContentView: View {
                 if let step = result.errorStep, step - 1 < lines.count {
                     errorLine = lines[step - 1].lineNumber
                 }
-                resultText = result.message ?? "Something doesn't follow."
+
+                show(Feedback(
+                    text: result.message ?? "Something doesn't follow.",
+                    tone: .bad,
+                    skipped: skipped
+                ))
             }
         } catch {
-            resultText = "Could not reach the server."
+            // Clearing the page cancels the check, which is not a failure the
+            // student needs telling about.
+            if !Task.isCancelled {
+                show(Feedback(text: "Could not reach the server.", tone: .bad))
+            }
         }
     }
 }

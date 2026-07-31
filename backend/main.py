@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from checker.handwriting import read_handwriting
 from checker.parser import parse_equation, parse_latex_equation
-from checker.problems import get_problem
+from checker.problems import get_problem, list_problems
 from checker.step_checker import check_equations, check_steps
 
 app = FastAPI()
@@ -43,6 +43,14 @@ class HandwritingRequest(BaseModel):
 @app.get("/")
 def home():
     return {"message": "StepOut API — send a POST request to /check"}
+
+
+@app.get("/problems")
+def read_problems():
+    """
+    The whole set, so the iPad can show the student what is coming.
+    """
+    return {"problems": list_problems()}
 
 
 @app.get("/problem/{index}")

@@ -70,9 +70,9 @@ func checkHandwriting(_ rows: [RowData], problemIndex: Int?) async throws -> Che
     return try await post(path: "/check-handwriting", jsonBody: body)
 }
 
-/// Ask the server for one problem to show the student.
-func fetchProblem(at index: Int) async throws -> Problem {
-    let url = URL(string: serverAddress + "/problem/\(index)")!
+/// Ask the server for every problem, so the sidebar can list them.
+func fetchProblems() async throws -> [Problem] {
+    let url = URL(string: serverAddress + "/problems")!
     let (data, _) = try await URLSession.shared.data(from: url)
-    return try JSONDecoder().decode(Problem.self, from: data)
+    return try JSONDecoder().decode(ProblemList.self, from: data).problems
 }

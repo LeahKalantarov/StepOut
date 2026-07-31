@@ -30,6 +30,21 @@ def solve_for_answer(equation):
     return f"{variable} = {answers[0]}"
 
 
+def list_problems():
+    """
+    Every problem, for the sidebar. No answers: the iPad never needs them,
+    and anything sent to the app can be read by the student.
+    """
+    return [
+        {
+            "index": index,
+            "prompt": "Solve for x",
+            "equation": equation_text,
+        }
+        for index, equation_text in enumerate(PROBLEMS)
+    ]
+
+
 def get_problem(index):
     """
     Return one problem, or None if the index is past the end of the list.
