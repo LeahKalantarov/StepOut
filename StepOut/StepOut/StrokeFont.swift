@@ -9,11 +9,18 @@ import SwiftUI
 ///
 /// So we use a Hershey font instead. These were drawn in the 1960s at a US Navy
 /// lab for pen plotters, machines that held an actual pen, so every character is
-/// stored as the line the pen follows. That is exactly what we need. They are
-/// public domain, and `cursive.jhf` is the joined-up handwriting one.
+/// stored as the line the pen follows. That is exactly what we need, and they
+/// are public domain.
 ///
-/// The file is unmodified, from github.com/kamalmostafa/hershey-fonts.
+/// The files are unmodified, from github.com/kamalmostafa/hershey-fonts.
 enum StrokeFont {
+
+    /// Which handwriting to use. Three are bundled, so this is the only line
+    /// to change:
+    ///   futural — neat block printing, the way most people write out maths
+    ///   rowmans — much the same, a little narrower
+    ///   cursive — joined-up script, prettier but harder to read
+    private static let fontName = "futural"
 
     /// One character: the pen paths that draw it, and where it sits sideways.
     private struct Glyph {
@@ -62,7 +69,7 @@ enum StrokeFont {
 
     // MARK: - Reading the font file
 
-    /// Unpack cursive.jhf into a glyph for each character.
+    /// Unpack the font file into a glyph for each character.
     ///
     /// The format is from an era that counted every byte, so it is terse but
     /// simple. One line per character, and every number is a single letter:
@@ -75,7 +82,7 @@ enum StrokeFont {
     /// unbroken line.
     private static func readFontFile() -> [Character: Glyph] {
         guard
-            let url = Bundle.main.url(forResource: "cursive", withExtension: "jhf"),
+            let url = Bundle.main.url(forResource: fontName, withExtension: "jhf"),
             let contents = try? String(contentsOf: url, encoding: .utf8)
         else {
             return [:]
