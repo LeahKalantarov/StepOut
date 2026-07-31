@@ -1,18 +1,15 @@
 import PencilKit
 
-/// The student's canvas, carrying Apple's floating tool palette.
+/// The student's canvas.
 ///
-/// This is the same palette Notes and Freeform use, and it brings the pen,
-/// pencil, marker, eraser, lasso, colours, thickness and undo with it.
-///
-/// The palette follows whichever view is first responder, so claiming that
-/// role is what puts it on screen. That is also what makes the palette's undo
-/// and redo buttons reach this canvas.
+/// Apple's floating tool palette is deliberately not used: it is a fixed-size
+/// system control and too large for this page. PenPalette replaces it, and
+/// this class covers the two things that palette used to handle for us — the
+/// pencil squeeze, and being the view that owns the undo history.
 final class NotebookCanvas: PKCanvasView {
-    // Held for as long as the canvas lives. The palette stops working if its
-    // picker is released, and SwiftUI is free to rebuild the surrounding
-    // NotebookPage struct as often as it likes.
-    private let toolPicker = PKToolPicker()
+
+    /// Called when the student squeezes an Apple Pencil Pro.
+    var onSqueeze: (() -> Void)?
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -21,12 +18,39 @@ final class NotebookCanvas: PKCanvasView {
         // view has none yet inside makeUIView. By here it does.
         guard window != nil else { return }
 
-        // Finger and pencil both draw on this page, so the palette's "Draw
-        // with finger" switch would have nothing left to change.
-        toolPicker.showsDrawingPolicyControls = false
-
-        toolPicker.addObserver(self)
-        toolPicker.setVisible(true, forFirstResponder: self)
         becomeFirstResponder()
+
+        if pencilInteraction.delegate == nil {
+            pencilInteraction.delegate = self
+            addInteraction(pencilInteraction)
+        }
+    }
+
+    private let pencilInteraction = UIPencilInteraction()
+
+    /// Wipe the page in a way undo can put back.
+    ///
+    /// Assigning to `drawing` directly bypasses the undo history, which would
+    /// leave the undo button lying about what it can restore.
+    func erasePage() {
+        let previous = drawing
+
+        undoManager?.registerUndo(withTarget: self) { canvas in
+            canvas.drawing = previous
+        }
+
+        drawing = PKDrawing()
+    }
+}
+
+extension NotebookCanvas: UIPencilInteractionDelegate {
+    // Implementing this replaces whatever the squeeze does system-wide, which
+    // is the point: on this page it should always reach for the eraser.
+    func pencilInteraction(
+        _ interaction: UIPencilInteraction,
+        didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze
+    ) {
+        guard squeeze.phase == .ended else { return }
+        onSqueeze?()
     }
 }

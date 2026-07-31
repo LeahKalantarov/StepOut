@@ -1,12 +1,18 @@
 import PencilKit
 import SwiftUI
 
-/// One canvas covering the whole page, so you can write anywhere on it.
+/// The layer the student writes on, covering the whole page.
 ///
 /// It is see-through on purpose: the ruled paper sits behind it and needs to
 /// stay visible.
 struct NotebookPage: UIViewRepresentable {
     let canvas: NotebookCanvas
+
+    /// What to write with. Passed as a plain value so that choosing a new
+    /// colour or the eraser reaches the canvas the moment it is tapped.
+    let tool: PKTool
+
+    let onSqueeze: () -> Void
 
     func makeUIView(context: Context) -> NotebookCanvas {
         canvas.drawingPolicy = .anyInput
@@ -14,8 +20,12 @@ struct NotebookPage: UIViewRepresentable {
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
 
+        canvas.onSqueeze = onSqueeze
+
         return canvas
     }
 
-    func updateUIView(_ uiView: NotebookCanvas, context: Context) {}
+    func updateUIView(_ uiView: NotebookCanvas, context: Context) {
+        uiView.tool = tool
+    }
 }

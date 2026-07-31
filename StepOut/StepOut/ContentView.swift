@@ -5,6 +5,8 @@ struct ContentView: View {
     // The whole page is one canvas, so writing can go anywhere on it.
     @State private var canvas = NotebookCanvas()
 
+    @State private var pen = Pen()
+
     @State private var problems: [Problem] = []
     @State private var currentIndex = 0
 
@@ -109,7 +111,19 @@ struct ContentView: View {
                 )
             }
 
-            NotebookPage(canvas: canvas)
+            NotebookPage(
+                canvas: canvas,
+                tool: pen.tool,
+                onSqueeze: { pen.isErasing.toggle() }
+            )
+        }
+        .overlay(alignment: .bottomTrailing) {
+            PenPalette(
+                pen: pen,
+                undo: { canvas.undoManager?.undo() },
+                redo: { canvas.undoManager?.redo() }
+            )
+            .padding(20)
         }
         .overlay(alignment: .top) {
             if let feedback {
@@ -197,7 +211,7 @@ struct ContentView: View {
         // about to be wiped, so call it off first.
         checkTask?.cancel()
 
-        canvas.drawing = PKDrawing()
+        canvas.erasePage()
         errorLine = nil
         solvedLine = nil
         hideFeedback()
