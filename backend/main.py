@@ -3,10 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from checker.handwriting import read_handwriting
+from checker.answers import answer
+from checker.handwriting import read_handwriting, read_words, split_on_arrows
+from checker.lesson import teach, work_through
 from checker.parser import parse_equation, parse_latex_equation
 from checker.problems import get_problem, list_problems
 from checker.step_checker import check_equations, check_steps
+from checker.tutor import explain
 
 app = FastAPI()
 
@@ -38,6 +41,28 @@ class HandwritingRequest(BaseModel):
     # Which problem the student is working on. None means free practice,
     # where we only check that the steps follow each other.
     problem_index: int | None = None
+
+
+class WordsRequest(BaseModel):
+    rows: list[Row]
+
+
+class LessonRequest(BaseModel):
+    wrong_line: str
+    question: str | None = None
+    previous_line: str | None = None
+
+    # What the checker decided was wrong with the step, in its own words.
+    reason: str | None = None
+
+
+class AskRequest(BaseModel):
+    question: str
+
+    # The problem they are on, and the lines they have written under it. A
+    # question like "why doesn't that work" means nothing without them.
+    problem: str | None = None
+    work: list[str] | None = None
 
 
 @app.get("/")
@@ -112,22 +137,27 @@ def check_handwriting(request: HandwritingRequest):
             latex = read_handwriting(strokes)
             print(f"row {row_number + 1}: {len(row.strokes)} strokes -> {latex!r}")
 
-            # Students annotate their work, writing things like "-5  -5" under
-            # both sides. Those lines are not equations, so we pass over them
-            # instead of letting one of them fail the whole check.
-            #
-            # Any parse failure counts, not just a missing "=". A scribble can
-            # come back as LaTeX that SymPy chokes on in its own way, and one
-            # unreadable annotation must never sink the whole page.
-            try:
-                equation = parse_latex_equation(latex)
-            except Exception:
-                ignored.append(latex)
-                continue
+            # One line can hold more than one step when the student chains them
+            # with arrows, so ask for the steps rather than assuming there is
+            # one. They all point back at the same row, which is what a mark in
+            # the margin needs.
+            for step in split_on_arrows(latex):
+                # Students annotate their work, writing things like "-5  -5"
+                # under both sides. Those lines are not equations, so we pass
+                # over them instead of letting one of them fail the whole check.
+                #
+                # Any parse failure counts, not just a missing "=". A scribble
+                # can come back as LaTeX that SymPy chokes on in its own way,
+                # and one unreadable annotation must never sink the whole page.
+                try:
+                    equation = parse_latex_equation(step)
+                except Exception:
+                    ignored.append(step)
+                    continue
 
-            equations.append(equation)
-            recognized.append(latex)
-            source_rows.append(row_number)
+                equations.append(equation)
+                recognized.append(step)
+                source_rows.append(row_number)
 
         if len(equations) == 0:
             return {
@@ -138,6 +168,7 @@ def check_handwriting(request: HandwritingRequest):
             }
 
         # When the student was given a problem, make sure they copied it right
+        problem = None
         problem_equation = None
         if request.problem_index is not None:
             problem = get_problem(request.problem_index)
@@ -148,9 +179,38 @@ def check_handwriting(request: HandwritingRequest):
         result["recognized"] = recognized
         result["ignored"] = ignored
 
-        # Translate "2nd equation" back into "the row you wrote it on"
         if not result["ok"]:
-            result["error_step"] = source_rows[result["error_step"] - 1] + 1
+            step = result["error_step"]
+
+            # The very first line has no line above it, so what it had to follow
+            # from was the question itself.
+            question = problem["equation"] if problem else None
+            came_from = recognized[step - 2] if step >= 2 else question
+
+            explanation = explain(
+                question, came_from, recognized[step - 1], result.get("reason")
+            )
+            if explanation:
+                result["message"] = explanation
+
+            # Everything a lesson about this mistake would need, so that if the
+            # student asks for help the iPad can hand it straight back to us
+            # without having to work out what went wrong all over again.
+            result["help"] = {
+                "question": question,
+                "previous_line": came_from,
+                "wrong_line": recognized[step - 1],
+                "reason": result.get("reason"),
+            }
+
+            # Translate "2nd equation" back into "the row you wrote it on"
+            result["error_step"] = source_rows[step - 1] + 1
+
+        verdict = "ok" if result["ok"] else f"WRONG ({result.get('reason')})"
+        print(
+            f"problem={request.problem_index} {len(equations)} equation(s)"
+            f" -> {verdict}, help={'yes' if 'help' in result else 'no'}"
+        )
 
         return result
     except Exception as error:
@@ -158,3 +218,92 @@ def check_handwriting(request: HandwritingRequest):
             status_code=400,
             content={"ok": False, "message": str(error)},
         )
+
+
+@app.post("/read-words")
+def read_written_words(request: WordsRequest):
+    """
+    Read rows as ordinary writing rather than as algebra.
+
+    Used when the tutor has asked something and is waiting to be answered.
+    """
+    try:
+        words = []
+
+        for row in request.rows:
+            if len(row.strokes) == 0:
+                continue
+
+            strokes = [{"x": s.x, "y": s.y} for s in row.strokes]
+            words.append(read_words(strokes))
+
+        print(f"read as words: {words}")
+
+        return {"words": words}
+    except Exception as error:
+        return JSONResponse(
+            status_code=400,
+            content={"message": str(error)},
+        )
+
+
+@app.post("/lesson")
+def write_lesson(request: LessonRequest):
+    """
+    Teach the idea behind a mistake, on a question that isn't the student's.
+
+    Answers 503 when we have nothing we can stand behind — no API key, or a
+    worked example that did not survive being checked. The iPad treats that as
+    "no lesson this time" and leaves the page alone, which is the right
+    outcome: the cross and the explanation are still there.
+    """
+    lesson = teach(
+        request.question,
+        request.previous_line,
+        request.wrong_line,
+        request.reason,
+    )
+
+    if lesson is None:
+        return JSONResponse(
+            status_code=503,
+            content={"message": "No lesson this time."},
+        )
+
+    return lesson
+
+
+@app.post("/ask")
+def answer_question(request: AskRequest):
+    """
+    Answer a question the student wrote on their page.
+    """
+    reply = answer(request.question, request.problem, request.work)
+
+    if reply is None:
+        return JSONResponse(
+            status_code=503,
+            content={"message": "No answer this time."},
+        )
+
+    return {"answer": reply}
+
+
+@app.post("/work-through")
+def work_an_example(request: AskRequest):
+    """
+    Work an example through in answer to a question.
+
+    Same 503 as /lesson, and for the same reason: an example that failed the
+    checker is worse than no example, because it arrives in the tutor's own
+    hand and the student has no reason to doubt it.
+    """
+    lesson = work_through(request.question, request.problem)
+
+    if lesson is None:
+        return JSONResponse(
+            status_code=503,
+            content={"message": "No example this time."},
+        )
+
+    return lesson

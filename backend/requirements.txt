@@ -8,3 +8,6 @@ python-dotenv
 
 # Lets SymPy read LaTeX (what MyScript gives us back)
 antlr4-python3-runtime==4.11
+
+# Turns a wrong step into an explanation a student can learn from
+openai

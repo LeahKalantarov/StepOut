@@ -38,22 +38,27 @@ def sign_request(body_text, application_key, hmac_key):
     return hmac.new(secret, body_text.encode("utf-8"), hashlib.sha512).hexdigest()
 
 
-def build_request_body(strokes):
+def build_request_body(strokes, content_type="Math"):
     """
     Package one row of pen strokes the way MyScript expects.
 
     'strokes' looks like: [{"x": [1, 2, 3], "y": [4, 5, 6]}, ...]
     where each dict is one continuous pen line.
+
+    'content_type' decides which alphabet MyScript reads the row against.
+    The same three shapes are "yes" to a reader expecting words and y times e
+    times s to one expecting algebra, so we have to say which we want.
     """
     return {
-        "contentType": "Math",
+        "contentType": content_type,
         "scaleX": SCALE,
         "scaleY": SCALE,
         "configuration": {
+            "lang": "en_US",
             # Critical: we do NOT want MyScript to solve or tidy up the math.
             # Our whole job is catching the student's mistakes, so we need
             # the equation exactly as it was written.
-            "math": {"solver": {"enable": False}}
+            "math": {"solver": {"enable": False}},
         },
         "strokes": strokes,
     }
@@ -88,6 +93,27 @@ def tidy_spacing(latex_text):
     return text
 
 
+# The ways a student might draw "and then". MyScript reads all of these back
+# as LaTeX arrow commands.
+ARROWS = re.compile(r"\\(?:longrightarrow|rightarrow|Rightarrow|implies|to)\b")
+
+
+def split_on_arrows(latex_text):
+    """
+    Break one written line into the steps it holds.
+
+    Not everyone works down the page. Plenty of people write straight across
+    it instead — "2x + 5 = 13 -> 2x = 8 -> x = 4" — and that comes back as a
+    single string with three equals signs in it. That is not an equation, so
+    without this the whole line would fail to parse and be quietly dropped,
+    which looks to the student like their work simply vanished.
+
+    Returns a list, usually of one, so a line written the ordinary way passes
+    through untouched.
+    """
+    return [piece.strip() for piece in ARROWS.split(latex_text) if piece.strip()]
+
+
 def heal_crossed_out_terms(latex_text):
     """
     Undo the fraction bar the recognizer invents from a cross-out.
@@ -110,11 +136,9 @@ def heal_crossed_out_terms(latex_text):
     return re.sub(r"\\frac\{\}\{\}", "", text)  # a bar and nothing else
 
 
-def read_handwriting(strokes):
+def ask_myscript(strokes, content_type, accept):
     """
-    Send one row of strokes to MyScript and return the LaTeX it recognized.
-
-    Example return value: "2x+5=13"
+    Send one row of strokes off to be read, and hand back what came home.
     """
     application_key = os.getenv("MYSCRIPT_APPLICATION_KEY")
     hmac_key = os.getenv("MYSCRIPT_HMAC_KEY")
@@ -127,14 +151,14 @@ def read_handwriting(strokes):
 
     # We serialize the body ourselves because the signature must match the
     # bytes we actually send, character for character.
-    body_text = json.dumps(build_request_body(strokes))
+    body_text = json.dumps(build_request_body(strokes, content_type))
 
     response = httpx.post(
         MYSCRIPT_URL,
         content=body_text,
         headers={
             "Content-Type": "application/json",
-            "Accept": "application/x-latex,application/json",
+            "Accept": accept,
             "applicationKey": application_key,
             "hmac": sign_request(body_text, application_key, hmac_key),
         },
@@ -144,5 +168,25 @@ def read_handwriting(strokes):
     if response.status_code != 200:
         raise ValueError(f"MyScript could not read that row: {response.text}")
 
-    recognized = response.text.strip()
+    return response.text.strip()
+
+
+def read_handwriting(strokes):
+    """
+    Read one row as algebra, and return the LaTeX for it.
+
+    Example return value: "2x+5=13"
+    """
+    recognized = ask_myscript(strokes, "Math", "application/x-latex,application/json")
     return tidy_spacing(settle_letter_case(heal_crossed_out_terms(recognized)))
+
+
+def read_words(strokes):
+    """
+    Read one row as ordinary writing, and return the words.
+
+    Used when the tutor has asked something and is waiting to be answered.
+    Reading that row as algebra would turn "yes" into y times e times s, so
+    for those moments we ask MyScript for English instead.
+    """
+    return ask_myscript(strokes, "Text", "text/plain").strip().lower()
