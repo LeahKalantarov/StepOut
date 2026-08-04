@@ -45,7 +45,11 @@ struct HandwrittenLine: View {
     /// Longer lines take longer to write, so the pen keeps a steady pace
     /// instead of racing through a long question and crawling through a short
     /// one. Callers use this to work out how long to wait their turn.
+    ///
+    /// It asks the font how many characters get written rather than counting
+    /// the text, because the `^` and braces in `x^{10}` are never drawn and
+    /// would otherwise buy the line time it does not need.
     static func writingTime(for text: String) -> Double {
-        max(0.6, Double(text.count) * 0.11)
+        max(0.6, Double(StrokeFont.writtenCharacterCount(in: text)) * 0.11)
     }
 }

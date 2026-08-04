@@ -1,12 +1,19 @@
 import Foundation
 
 // The simulator shares the Mac's network, so localhost works there.
-// A real iPad is a separate machine, so it needs the Mac's Wi-Fi address.
-// Find it with: ipconfig getifaddr en0
+//
+// A real iPad is a separate machine and has to be told where the Mac is. By
+// name rather than by address: an IP changes every time the Mac joins a
+// different network, and a wrong one here looks exactly like a broken app.
+// The name follows the Mac around.
+//
+// It must be the same Wi-Fi, and some guest and campus networks stop devices
+// talking to each other at all, in which case nothing here will help.
+// Check the name with: scutil --get LocalHostName
 #if targetEnvironment(simulator)
 let serverAddress = "http://localhost:8000"
 #else
-let serverAddress = "http://10.0.0.29:8000"
+let serverAddress = "http://MacBook-Pro-4.local:8000"
 #endif
 
 // MARK: - What we send when the student writes by hand
@@ -33,8 +40,11 @@ struct HandwritingRequest: Codable {
 // MARK: - Talking to the server
 
 /// Send a JSON body to the server and read the answer back.
-/// Both checks below use this, so the networking lives in one place.
-private func post(path: String, jsonBody: Data) async throws -> CheckResult {
+/// Everything below uses this, so the networking lives in one place.
+///
+/// The kind of answer expected is whatever the caller assigns the result to,
+/// which is how one function can serve a check, a reading and a lesson.
+private func post<Reply: Decodable>(path: String, jsonBody: Data) async throws -> Reply {
     var request = URLRequest(url: URL(string: serverAddress + path)!)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -49,7 +59,21 @@ private func post(path: String, jsonBody: Data) async throws -> CheckResult {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
 
-    return try decoder.decode(CheckResult.self, from: data)
+    return try decoder.decode(Reply.self, from: data)
+}
+
+/// The same, for a body we build from a Swift value.
+private func post<Body: Encodable, Reply: Decodable>(
+    path: String,
+    body: Body
+) async throws -> Reply {
+    let encoder = JSONEncoder()
+
+    // Turns problemIndex in Swift into "problem_index" in the JSON,
+    // which is the spelling the Python side expects.
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+
+    return try await post(path: path, jsonBody: encoder.encode(body))
 }
 
 /// Check steps that are already text, like "2x + 5 = 13".
@@ -60,14 +84,39 @@ func checkSteps(_ steps: [String]) async throws -> CheckResult {
 
 /// Send handwriting to be read and checked.
 func checkHandwriting(_ rows: [RowData], problemIndex: Int?) async throws -> CheckResult {
-    let encoder = JSONEncoder()
+    try await post(
+        path: "/check-handwriting",
+        body: HandwritingRequest(rows: rows, problemIndex: problemIndex)
+    )
+}
 
-    // Turns problemIndex in Swift into "problem_index" in the JSON,
-    // which is the spelling the Python side expects.
-    encoder.keyEncodingStrategy = .convertToSnakeCase
+/// Read handwriting as words rather than as algebra.
+///
+/// For the moments the tutor has asked something and is waiting to be
+/// answered. Read as algebra, "yes" comes back as y times e times s.
+func readWords(_ rows: [RowData]) async throws -> [String] {
+    let reply: WordsReply = try await post(path: "/read-words", body: HandwritingRequest(
+        rows: rows,
+        problemIndex: nil
+    ))
 
-    let body = try encoder.encode(HandwritingRequest(rows: rows, problemIndex: problemIndex))
-    return try await post(path: "/check-handwriting", jsonBody: body)
+    return reply.words
+}
+
+/// Ask for a short lesson about a mistake.
+func fetchLesson(for help: HelpContext) async throws -> Lesson {
+    try await post(path: "/lesson", body: help)
+}
+
+/// Ask a question the student wrote, and get a short answer back.
+func fetchAnswer(to question: Question) async throws -> String {
+    let reply: AnswerReply = try await post(path: "/ask", body: question)
+    return reply.answer
+}
+
+/// Ask for an example worked through, in answer to a question.
+func fetchWorkedExample(for question: Question) async throws -> Lesson {
+    try await post(path: "/work-through", body: question)
 }
 
 /// Ask the server for every problem, so the sidebar can list them.

@@ -3,13 +3,13 @@ import PencilKit
 /// The student's canvas.
 ///
 /// Apple's floating tool palette is deliberately not used: it is a fixed-size
-/// system control and too large for this page. PenPalette replaces it, and
-/// this class covers the two things that palette used to handle for us — the
-/// pencil squeeze, and being the view that owns the undo history.
+/// system control and too large for this page. PenPalette replaces it, and this
+/// class covers the one thing that palette used to handle for us — being the
+/// view that owns the undo history.
+///
+/// What the canvas reports (writing, pencil squeezes) is handled by
+/// NotebookPage.Coordinator, not here.
 final class NotebookCanvas: PKCanvasView {
-
-    /// Called when the student squeezes an Apple Pencil Pro.
-    var onSqueeze: (() -> Void)?
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -19,14 +19,7 @@ final class NotebookCanvas: PKCanvasView {
         guard window != nil else { return }
 
         becomeFirstResponder()
-
-        if pencilInteraction.delegate == nil {
-            pencilInteraction.delegate = self
-            addInteraction(pencilInteraction)
-        }
     }
-
-    private let pencilInteraction = UIPencilInteraction()
 
     /// Wipe the page in a way undo can put back.
     ///
@@ -40,17 +33,5 @@ final class NotebookCanvas: PKCanvasView {
         }
 
         drawing = PKDrawing()
-    }
-}
-
-extension NotebookCanvas: UIPencilInteractionDelegate {
-    // Implementing this replaces whatever the squeeze does system-wide, which
-    // is the point: on this page it should always reach for the eraser.
-    func pencilInteraction(
-        _ interaction: UIPencilInteraction,
-        didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze
-    ) {
-        guard squeeze.phase == .ended else { return }
-        onSqueeze?()
     }
 }

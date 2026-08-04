@@ -12,6 +12,13 @@ enum NotebookLayout {
     /// How far in the red margin rule sits.
     static let marginWidth: CGFloat = 56
 
+    /// How long a page is before anything is written on it.
+    ///
+    /// A page that stops at the bottom of the screen cannot be scrolled at
+    /// all, so there would be no way to look ahead at blank paper or back at
+    /// what the tutor wrote further up.
+    static let leastLines = 30
+
     /// Where writing rests on a given line: just above the rule, a little in
     /// from the margin, the way you would start writing on real paper.
     ///

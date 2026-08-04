@@ -8,39 +8,74 @@ import PencilKit
 // request; 2 keeps the shape of handwriting without being wasteful.
 private let sampleSpacing: CGFloat = 2
 
-/// One ruled line that has writing on it.
+// How far a stroke can sit below the line it is joining. Writing tilts as it
+// crosses the page, so this has to be forgiving — but it must stay well under
+// a full line height, or two rows of writing merge into one.
+private let sameLineDistance = NotebookLayout.lineHeight * 0.6
+
+/// One line of writing.
 struct WrittenLine {
-    /// Which ruled line this sits on, counting from the top of the page.
-    /// We keep it so a mark can be drawn beside the right line later.
+    /// The ruled line this sits closest to, counting from the top of the page.
+    /// Only used to put a tick or a cross beside the right line afterwards.
     let lineNumber: Int
 
     let strokes: [StrokeData]
 }
 
+/// A stroke and the height it was written at, while we work out which line it
+/// belongs to.
+private struct PlacedStroke {
+    let height: CGFloat
+    let coordinates: StrokeData
+}
+
 extension PKCanvasView {
     /// Gather the writing on this page into lines, ordered top to bottom.
     ///
-    /// A stroke belongs to whichever ruled line its middle sits on. That is
-    /// what lets one page hold several steps without needing a separate
-    /// canvas for each one.
+    /// The printed rules are there for the student, not for us. People write
+    /// across them, and a line that sags as it crosses the page would be torn
+    /// in half by anything that trusted the grid — half an equation is not an
+    /// equation, so the step would be quietly dropped and the student's work
+    /// would appear to vanish.
+    ///
+    /// So we find the lines in the writing itself: strokes at similar heights
+    /// belong together, and a real vertical gap starts a new line.
     func writtenLines() -> [WrittenLine] {
-        var strokesByLine: [Int: [StrokeData]] = [:]
+        var strokes: [PlacedStroke] = []
 
         for stroke in drawing.strokes {
             guard let coordinates = coordinates(of: stroke) else { continue }
-
-            let middle = stroke.renderBounds.midY
-            let lineNumber = Int(middle / NotebookLayout.lineHeight)
-
-            strokesByLine[lineNumber, default: []].append(coordinates)
+            strokes.append(PlacedStroke(height: stroke.renderBounds.midY, coordinates: coordinates))
         }
 
-        return strokesByLine.keys.sorted().map { lineNumber in
+        // Top to bottom, so strokes sharing a line arrive together whatever
+        // order they were written in — people go back to cross a t, or squeeze
+        // in a minus sign they forgot.
+        strokes.sort { $0.height < $1.height }
+
+        var lines: [[PlacedStroke]] = []
+
+        for stroke in strokes {
+            // Measured against the line's own average height, not a fixed
+            // grid. That average follows the writing down the page, so a
+            // gradual drift never builds up into a split.
+            if let line = lines.last, stroke.height - averageHeight(of: line) < sameLineDistance {
+                lines[lines.count - 1].append(stroke)
+            } else {
+                lines.append([stroke])
+            }
+        }
+
+        return lines.map { line in
             WrittenLine(
-                lineNumber: lineNumber,
-                strokes: movedToOrigin(strokesByLine[lineNumber] ?? [])
+                lineNumber: Int(averageHeight(of: line) / NotebookLayout.lineHeight),
+                strokes: movedToOrigin(line.map(\.coordinates))
             )
         }
+    }
+
+    private func averageHeight(of line: [PlacedStroke]) -> CGFloat {
+        line.reduce(0) { $0 + $1.height } / CGFloat(line.count)
     }
 
     /// Sample evenly spaced points along one stroke.

@@ -25,4 +25,24 @@ struct CheckResult: Codable {
     // Usually annotations like "-5  -5", or a cross-out the recognizer
     // turned into nonsense. Shown so a surprising verdict is explainable.
     let ignored: [String]?
+
+    // Everything a lesson about this mistake would need, when the step was
+    // wrong. Held onto in case the student asks for help, and handed straight
+    // back so nothing has to work out what went wrong a second time.
+    let help: HelpContext?
+}
+
+/// One mistake, described well enough to teach the idea behind it.
+///
+/// Travels in both directions: the server fills it in when a step fails, and
+/// the app sends the same thing back if help is asked for.
+struct HelpContext: Codable {
+    let wrongLine: String
+    let question: String?
+    let previousLine: String?
+
+    /// What the checker decided was wrong, in its own words. Without this the
+    /// tutor has to guess from two equations, and a dropped answer looks like
+    /// sound working until you count the answers.
+    let reason: String?
 }

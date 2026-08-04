@@ -2,10 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- The server runs on a Mac on the same Wi-Fi, over plain http. iOS
+	     blocks that by default; this permits it for local addresses only,
+	     which is the whole of what we need. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>Allow Local Networking</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+
+	<!-- Reaching the Mac by name rather than by number counts as looking
+	     around the local network, which iOS asks permission for. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>StepOut checks your working against a helper running on your Mac, on this Wi-Fi network.</string>
 </dict>
 </plist>
