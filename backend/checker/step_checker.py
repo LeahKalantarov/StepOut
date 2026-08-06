@@ -1,5 +1,6 @@
 from sympy import cancel, simplify
 
+from checker.diagnosis import diagnose_step
 from checker.parser import parse_equation
 
 
@@ -68,10 +69,20 @@ def check_equations(equations, labels):
         current_equation = equations[i]
 
         if not same_equation(previous_equation, current_equation):
+            detail = diagnose_step(
+                previous_equation,
+                current_equation,
+                labels[i - 1],
+                labels[i],
+            )
             return {
                 "ok": False,
                 "error_step": i + 1,
-                "message": f"{labels[i]} doesn't follow from {labels[i - 1]}",
+                "message": detail["message"],
+                "reason": detail.get("reason"),
+                "expected_answer": detail.get("expected_answer"),
+                "student_answer": detail.get("student_answer"),
+                "help": detail.get("help"),
             }
 
     # Every step holds up. Has the student actually reached an answer yet?

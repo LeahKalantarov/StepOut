@@ -7,5 +7,7 @@
 		<key>Allow Local Networking</key>
 		<true/>
 	</dict>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Attach photos of your work or notes so the tutor has more context.</string>
 </dict>
 </plist>
