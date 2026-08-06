@@ -15,5 +15,12 @@
 	     around the local network, which iOS asks permission for. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>StepOut checks your working against a helper running on your Mac, on this Wi-Fi network.</string>
+
+	<!-- Work done on real paper is brought in by photographing it. -->
+	<key>NSCameraUsageDescription</key>
+	<string>StepOut reads a photo of work you did on paper, so it can check it the same way it checks writing on the page.</string>
+
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>StepOut reads a photo of work you did on paper, so it can check it the same way it checks writing on the page.</string>
 </dict>
 </plist>

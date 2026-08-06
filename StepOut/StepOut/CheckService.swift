@@ -37,6 +37,17 @@ struct HandwritingRequest: Codable {
     let problemIndex: Int?
 }
 
+/// A photograph of work done on real paper.
+struct PhotoRequest: Codable {
+    // Sent inside the JSON rather than as a file upload, so a photograph
+    // travels the same way everything else does and there is only one piece of
+    // networking code to keep working.
+    let imageBase64: String
+
+    let mediaType: String
+    let problemIndex: Int?
+}
+
 // MARK: - Talking to the server
 
 /// Send a JSON body to the server and read the answer back.
@@ -88,6 +99,37 @@ func checkHandwriting(_ rows: [RowData], problemIndex: Int?) async throws -> Che
         path: "/check-handwriting",
         body: HandwritingRequest(rows: rows, problemIndex: problemIndex)
     )
+}
+
+/// Send a photograph of working to be read and checked.
+///
+/// Given longer than a written check: the picture has to travel, be read, and
+/// then be marked, and a photograph is a great deal more to send than a list
+/// of coordinates.
+func checkPhoto(_ jpeg: Data, problemIndex: Int?) async throws -> CheckResult {
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+
+    let body = try encoder.encode(
+        PhotoRequest(
+            imageBase64: jpeg.base64EncodedString(),
+            mediaType: "image/jpeg",
+            problemIndex: problemIndex
+        )
+    )
+
+    var request = URLRequest(url: URL(string: serverAddress + "/check-photo")!)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = body
+    request.timeoutInterval = 60
+
+    let (data, _) = try await URLSession.shared.data(for: request)
+
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+    return try decoder.decode(CheckResult.self, from: data)
 }
 
 /// Read handwriting as words rather than as algebra.

@@ -1,5 +1,6 @@
 import PencilKit
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     // The whole page is one canvas, so writing can go anywhere on it.
@@ -115,6 +116,9 @@ struct ContentView: View {
     // The batch a long press opened the keep-or-remove menu for.
     @State private var batchMenu: TutorBatch?
 
+    // Which way a photograph of work on real paper is being brought in.
+    @State private var photoChoice: PhotoChoice?
+
     // How wide the notebook is, so the tutor can use the full line.
     @State private var pageWidth: CGFloat = 700
 
@@ -209,6 +213,18 @@ struct ContentView: View {
             }
             .disabled(isChecking)
 
+            if PhotoChoice.camera.isAvailable {
+                Button("Photograph work on paper") {
+                    photoChoice = .camera
+                }
+                .disabled(isChecking)
+            }
+
+            Button("Check a photo") {
+                photoChoice = .library
+            }
+            .disabled(isChecking)
+
             Button(tutorApart ? "Tutor on the page" : "Tutor in its own panel") {
                 tutorApart.toggle()
             }
@@ -226,6 +242,16 @@ struct ContentView: View {
             }
 
             Button("Cancel", role: .cancel) {}
+        }
+        .sheet(item: $photoChoice) { choice in
+            PhotoSource(source: choice.source) { image in
+                photoChoice = nil
+
+                if let image {
+                    checkTask = Task { await checkPhotograph(image) }
+                }
+            }
+            .ignoresSafeArea()
         }
         .task {
             await loadProblems()
@@ -1368,6 +1394,85 @@ struct ContentView: View {
         } catch {
             // Clearing the page cancels the check, which is not a failure the
             // student needs telling about.
+            if !Task.isCancelled {
+                show(Feedback(text: "Could not reach the server.", tone: .bad))
+            }
+        }
+    }
+
+    /// Mark a photograph of work done on real paper.
+    ///
+    /// Written as a lesson rather than a remark, because there is nothing on
+    /// this page for it to be a remark about. A cross in the margin would point
+    /// at a ruled line the photographed working was never on, so the verdict
+    /// names the line instead and stays put like anything else taught.
+    func checkPhotograph(_ image: UIImage) async {
+        isChecking = true
+        defer { isChecking = false }
+
+        guard let jpeg = image.jpegForReading() else {
+            show(Feedback(text: "Could not read that photo.", tone: .bad))
+            return
+        }
+
+        stopListening()
+        growPage()
+
+        do {
+            let result = try await checkPhoto(jpeg, problemIndex: problem?.index)
+
+            if Task.isCancelled { return }
+
+            let read = result.recognized ?? []
+
+            guard !read.isEmpty else {
+                tutorWrites(
+                    [(result.message ?? "i couldn't read any maths in that photo.").lowercased()],
+                    kind: .lesson
+                )
+                return
+            }
+
+            // What it read, shown as plainly as possible. A photograph is read
+            // by a model rather than traced from strokes, so a misreading is
+            // likelier here than anywhere else in the app — and a verdict on
+            // lines the student never wrote is only explainable if they can see
+            // the lines it judged.
+            show(Feedback(text: "Read from your photo:", tone: .plain, skipped: read))
+
+            if result.ok {
+                if result.solved == true {
+                    solvedProblems.insert(currentIndex)
+                    tutorWrites(
+                        ["from your photo: solved. \(result.answer ?? "")".lowercased()],
+                        kind: .lesson
+                    )
+                } else {
+                    tutorWrites(
+                        [(result.message ?? "that follows so far. keep going.").lowercased()],
+                        kind: .lesson
+                    )
+                }
+            } else {
+                var says: [String] = []
+
+                if let step = result.errorStep, step >= 1, step - 1 < read.count {
+                    says.append("in your photo, line \(step) — \(read[step - 1]) — doesn't follow.".lowercased())
+                }
+
+                says.append((result.message ?? "something doesn't follow.").lowercased())
+
+                if result.help != nil {
+                    says.append("want a hand?")
+                }
+
+                tutorWrites(says, kind: .lesson)
+
+                if let help = result.help {
+                    markOffer(.help(help))
+                }
+            }
+        } catch {
             if !Task.isCancelled {
                 show(Feedback(text: "Could not reach the server.", tone: .bad))
             }
