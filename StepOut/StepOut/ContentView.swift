@@ -112,6 +112,9 @@ struct ContentView: View {
     // keep eating the page.
     @State private var collapsedBatches: Set<UUID> = []
 
+    // The batch a long press opened the keep-or-remove menu for.
+    @State private var batchMenu: TutorBatch?
+
     // How wide the notebook is, so the tutor can use the full line.
     @State private var pageWidth: CGFloat = 700
 
@@ -180,6 +183,26 @@ struct ContentView: View {
         }
         .animation(.snappy, value: showQuestions)
         .animation(.snappy, value: tutorApart)
+        .confirmationDialog(
+            "Tutor note",
+            isPresented: Binding(
+                get: { batchMenu != nil },
+                set: { if !$0 { batchMenu = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let batch = batchMenu {
+                Button(collapsedBatches.contains(batch.id) ? "Expand" : "Collapse to one line") {
+                    toggleBatchCollapsed(batch)
+                }
+
+                Button("Remove", role: .destructive) {
+                    removeBatch(batch)
+                }
+            }
+
+            Button("Cancel", role: .cancel) {}
+        }
         .confirmationDialog("More", isPresented: $showMore, titleVisibility: .hidden) {
             Button("Ask about this") {
                 checkTask = Task { await askQuestion() }
@@ -342,24 +365,27 @@ struct ContentView: View {
                         .transition(.scale.combined(with: .opacity))
                     }
 
-                    // Written answers still work, but there is no "underneath
-                    // the question" once the tutor has its own panel, so the
-                    // same two answers are always here to be tapped.
+                    // Tapping is the reliable way to answer: a written "yes" is
+                    // ink you then have to rub out, and it lands wherever there
+                    // happened to be room. Writing one still works for anyone
+                    // who would rather not leave the page.
                     if offer != nil, answered == nil {
-                        HStack(spacing: 10) {
+                        HStack(spacing: 12) {
                             Text("Want a hand?")
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(.secondary)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.ink)
 
                             Button("Yes") { replyTask = Task { await answer(.yes) } }
                                 .buttonStyle(.borderedProminent)
+                                .controlSize(.large)
                                 .tint(Theme.pink)
 
                             Button("No") { replyTask = Task { await answer(.no) } }
                                 .buttonStyle(.bordered)
+                                .controlSize(.large)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 11)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 14)
                         .brutalBorder(radius: 24)
                         .transition(.scale.combined(with: .opacity))
                     }
@@ -520,16 +546,12 @@ struct ContentView: View {
     func tutorBatchHitArea(_ batch: TutorBatch) -> some View {
         let bounds = batchBounds(batch)
 
-        return Color.clear
-            .frame(width: bounds.width, height: bounds.height)
-            .contentShape(Rectangle())
-            .offset(x: bounds.minX, y: bounds.minY)
-            .onTapGesture(count: 2) {
-                toggleBatchCollapsed(batch)
-            }
-            .contextMenu {
-                tutorBatchMenu(batch)
-            }
+        return FingerTapArea(
+            onDoubleTap: { toggleBatchCollapsed(batch) },
+            onLongPress: { batchMenu = batch }
+        )
+        .frame(width: bounds.width, height: bounds.height)
+        .offset(x: bounds.minX, y: bounds.minY)
     }
 
     func tutorPanelBatch(_ batch: TutorBatch) -> some View {
@@ -593,13 +615,17 @@ struct ContentView: View {
             .padding(.top, NotebookLayout.penStart(onLine: batch.firstLine).y - tutorHeight)
     }
 
+    /// The patch of paper a batch is tappable on — what you can see of it, so a
+    /// folded batch stops claiming the lines it is no longer using.
     func batchBounds(_ batch: TutorBatch) -> CGRect {
+        let folded = collapsedBatches.contains(batch.id)
         let originX = batch.lines.first?.originX ?? NotebookLayout.marginWidth + 16
         let firstLine = batch.firstLine
-        let lastLine = batch.lines.map(\.line).max() ?? firstLine
-        let rightEdge = batch.lines.map { line in
-            line.originX + StrokeFont.width(of: line.text, height: tutorHeight)
-        }.max() ?? originX + 120
+        let lastLine = folded ? firstLine : (batch.lines.map(\.line).max() ?? firstLine)
+
+        let rightEdge = folded
+            ? originX + 220
+            : (batch.lines.map { $0.originX + StrokeFont.width(of: $0.text, height: tutorHeight) }.max() ?? originX + 120)
 
         let top = NotebookLayout.penStart(onLine: firstLine).y - tutorHeight - 6
         let bottom = NotebookLayout.penStart(onLine: lastLine).y + 10
@@ -733,38 +759,39 @@ struct ContentView: View {
     ) {
         var line: Int
         var originX: CGFloat
+        var columnWidth: CGFloat
         var delay = 0.0
 
         if kind == .lesson, let last = tutorLines.last(where: { $0.kind == .lesson }) {
             // Carry on where the last part of the lesson left off.
             line = last.line + 1
             originX = last.originX
-        } else if kind == .lesson {
-            // A lesson is a paragraph, not a note in the margin. It starts
-            // under everything on the page and runs the full width.
-            line = lowestUsedLine() + 1
-            originX = NotebookLayout.penStart(onLine: line).x
+            columnWidth = max(120, pageWidth - originX - 24)
         } else {
-            let anchor = nextTutorAnchor(nearLine: nearLine, beside: bounds)
-            line = anchor.line
-            originX = anchor.originX
-        }
+            // How much width this writing actually wants. A short remark is
+            // happy in a gap beside the work; anything that has to wrap needs a
+            // real column, or it comes out two words at a time down the margin.
+            let longest = sentences
+                .map { StrokeFont.width(of: $0, height: tutorHeight) }
+                .max() ?? 0
+            let wanted = min(max(longest, 120), leastTutorColumn)
 
-        // Never write into a sliver. A short remark is happy in a narrow gap
-        // beside the work, but anything that has to wrap needs a real column —
-        // otherwise it comes out two words at a time down the right margin.
-        let room = pageWidth - originX - 24
-        let longest = sentences
-            .map { StrokeFont.width(of: $0, height: tutorHeight) }
-            .max() ?? 0
+            // A lesson is a paragraph rather than a note in the margin, so it
+            // starts below the work instead of trying to squeeze in beside it.
+            let from = kind == .lesson
+                ? lowestUsedLine() + 1
+                : anchorLine(nearLine: nearLine, beside: bounds)
 
-        if room < min(longest, leastTutorColumn) {
-            line = max(line, lowestUsedLine() + 1)
-            originX = NotebookLayout.penStart(onLine: line).x
+            let spot = freeSpot(width: wanted, from: from)
+            line = spot.line
+            originX = spot.originX
+
+            // Wrap to the clear run of paper, not to the edge of the page, so
+            // the writing stops before whatever is sitting further along.
+            columnWidth = max(120, min(spot.width, pageWidth - originX - 24))
         }
 
         let batch = UUID()
-        let columnWidth = pageWidth - originX - 24
 
         for sentence in sentences {
             for text in StrokeFont.wrap(sentence, height: tutorHeight, into: columnWidth) {
@@ -833,52 +860,77 @@ struct ContentView: View {
         replyTask?.cancel()
     }
 
-    /// Place the tutor beside the student's ink on the line being discussed —
-    /// not at the top of the page, not forced to the right half.
-    func nextTutorAnchor(nearLine: Int? = nil, beside bounds: CGRect? = nil) -> (line: Int, originX: CGFloat) {
-        let working = canvas.workingLines(pageWidth: pageWidth)
-        var targetLine = nearLine ?? working.last?.lineNumber ?? errorLine ?? 2
+    /// Which ruled line a remark is about, so it can be written beside it.
+    func anchorLine(nearLine: Int? = nil, beside bounds: CGRect? = nil) -> Int {
+        if let nearLine { return nearLine }
 
         if let bounds {
-            targetLine = nearLine ?? max(0, Int(bounds.midY / NotebookLayout.lineHeight))
+            return max(0, Int(bounds.midY / NotebookLayout.lineHeight))
         }
 
-        var rightEdge = bounds?.maxX ?? canvas.rightEdgeOfInk(onLine: targetLine, pageWidth: pageWidth)
+        return canvas.workingLines(pageWidth: pageWidth).last?.lineNumber ?? errorLine ?? 2
+    }
 
-        for written in tutorLines where written.line == targetLine {
-            rightEdge = max(
-                rightEdge,
+    /// What is already written across one ruled line, left to right.
+    ///
+    /// A folded batch still counts for the room it takes when it is opened
+    /// again. Otherwise the space it frees gets written into, and unfolding it
+    /// drops a paragraph straight on top of whatever moved in.
+    func occupiedSpans(onLine lineNumber: Int) -> [(minX: CGFloat, maxX: CGFloat)] {
+        var spans: [(minX: CGFloat, maxX: CGFloat)] = []
+
+        let lineY = NotebookLayout.penStart(onLine: lineNumber).y
+        let band = NotebookLayout.lineHeight * 0.65
+
+        for written in canvas.writtenLines() where abs(written.bounds.midY - lineY) < band {
+            spans.append((written.bounds.minX, written.bounds.maxX))
+        }
+
+        for written in tutorLines where written.line == lineNumber {
+            spans.append((
+                written.originX,
                 written.originX + StrokeFont.width(of: written.text, height: tutorHeight)
-            )
+            ))
         }
 
-        var originX = rightEdge + NotebookLayout.columnGap
-        var line = targetLine
+        // The printed question sits on the first two lines and is not ink.
+        if problem != nil, lineNumber <= 1 {
+            spans.append((0, pageWidth))
+        }
 
-        // Barely any room beside this line — try the next one down, and failing
-        // that start again at the left margin. The caller checks again against
-        // the text it is about to write, which is what catches a long remark
-        // aimed at a gap only wide enough for a short one.
-        let leastGap: CGFloat = 160
+        return spans.sorted { $0.minX < $1.minX }
+    }
 
-        if pageWidth - originX - 24 < leastGap {
-            line = targetLine + 1
-            originX = canvas.rightEdgeOfInk(onLine: line, pageWidth: pageWidth) + NotebookLayout.columnGap
+    /// The first clear stretch of paper wide enough to write in.
+    ///
+    /// Walks down the page from a starting line, and across each line past
+    /// anything already written, so the tutor lands in space that is actually
+    /// free rather than wherever the arithmetic happened to point.
+    func freeSpot(width: CGFloat, from line: Int) -> (line: Int, originX: CGFloat, width: CGFloat) {
+        let leftEdge = NotebookLayout.penStart(onLine: 0).x
+        let rightEdge = pageWidth - 24
+        let start = max(0, line)
 
-            if pageWidth - originX - 24 < leastGap {
-                line = max(line, lowestUsedLine() + 1)
-                originX = NotebookLayout.penStart(onLine: line).x
+        for candidate in start...(start + 40) {
+            var cursor = leftEdge
+
+            for span in occupiedSpans(onLine: candidate) {
+                let gap = span.minX - NotebookLayout.columnGap - cursor
+
+                if gap >= width {
+                    return (candidate, cursor, gap)
+                }
+
+                cursor = max(cursor, span.maxX + NotebookLayout.columnGap)
+            }
+
+            if rightEdge - cursor >= width {
+                return (candidate, cursor, rightEdge - cursor)
             }
         }
 
-        // Earlier tutor notes in this column stay visible. Start below them
-        // rather than on top of them when a recheck brings fresh feedback.
-        let columnLines = tutorLines.filter { abs($0.originX - originX) < 48 }
-        if let lowest = columnLines.map(\.line).max(), lowest >= line {
-            line = lowest + 1
-        }
-
-        return (line, originX)
+        let below = lowestUsedLine() + 1
+        return (below, leftEdge, rightEdge - leftEdge)
     }
 
     /// The lowest ruled line anything occupies, for growing the page.
