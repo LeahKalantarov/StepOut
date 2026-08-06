@@ -36,8 +36,11 @@ struct ContentView: View {
                         .font(.largeTitle)
 
                     Text(AppBuild.marker)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.pink, in: Capsule())
                 }
 
                 contextSection
