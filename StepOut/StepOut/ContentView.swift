@@ -31,8 +31,14 @@ struct ContentView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                Text("StepOut")
-                    .font(.largeTitle)
+                VStack(spacing: 4) {
+                    Text("StepOut")
+                        .font(.largeTitle)
+
+                    Text(AppBuild.marker)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
 
                 contextSection
 
