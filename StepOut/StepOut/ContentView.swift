@@ -139,6 +139,14 @@ struct ContentView: View {
     /// Height of the tutor's handwriting — a little smaller than the question.
     private let tutorHeight: CGFloat = 18
 
+    /// Narrowest column the tutor will write in beside the student's work.
+    ///
+    /// Without a floor, a remark that starts an inch from the right edge gets
+    /// wrapped into two words a line all the way down the margin, which is
+    /// decoding rather than reading. Below this the tutor moves under the work
+    /// and uses the whole width instead.
+    private let leastTutorColumn: CGFloat = 300
+
     /// Lines sit closer together in the panel than on ruled paper.
 
     var body: some View {
@@ -727,17 +735,36 @@ struct ContentView: View {
         var originX: CGFloat
         var delay = 0.0
 
-        if kind == .lesson, let last = tutorLines.last {
+        if kind == .lesson, let last = tutorLines.last(where: { $0.kind == .lesson }) {
+            // Carry on where the last part of the lesson left off.
             line = last.line + 1
             originX = last.originX
+        } else if kind == .lesson {
+            // A lesson is a paragraph, not a note in the margin. It starts
+            // under everything on the page and runs the full width.
+            line = lowestUsedLine() + 1
+            originX = NotebookLayout.penStart(onLine: line).x
         } else {
             let anchor = nextTutorAnchor(nearLine: nearLine, beside: bounds)
             line = anchor.line
             originX = anchor.originX
         }
 
+        // Never write into a sliver. A short remark is happy in a narrow gap
+        // beside the work, but anything that has to wrap needs a real column —
+        // otherwise it comes out two words at a time down the right margin.
+        let room = pageWidth - originX - 24
+        let longest = sentences
+            .map { StrokeFont.width(of: $0, height: tutorHeight) }
+            .max() ?? 0
+
+        if room < min(longest, leastTutorColumn) {
+            line = max(line, lowestUsedLine() + 1)
+            originX = NotebookLayout.penStart(onLine: line).x
+        }
+
         let batch = UUID()
-        let columnWidth = max(160, pageWidth - originX - 24)
+        let columnWidth = pageWidth - originX - 24
 
         for sentence in sentences {
             for text in StrokeFont.wrap(sentence, height: tutorHeight, into: columnWidth) {
@@ -828,11 +855,18 @@ struct ContentView: View {
         var originX = rightEdge + NotebookLayout.columnGap
         var line = targetLine
 
-        // Not enough room on this line — drop one line, stay beside their work.
-        if originX + 80 > pageWidth - 20 {
+        // Barely any room beside this line — try the next one down, and failing
+        // that start again at the left margin. The caller checks again against
+        // the text it is about to write, which is what catches a long remark
+        // aimed at a gap only wide enough for a short one.
+        let leastGap: CGFloat = 160
+
+        if pageWidth - originX - 24 < leastGap {
             line = targetLine + 1
             originX = canvas.rightEdgeOfInk(onLine: line, pageWidth: pageWidth) + NotebookLayout.columnGap
-            if originX + 80 > pageWidth - 20 {
+
+            if pageWidth - originX - 24 < leastGap {
+                line = max(line, lowestUsedLine() + 1)
                 originX = NotebookLayout.penStart(onLine: line).x
             }
         }

@@ -26,7 +26,7 @@ Open in Xcode:
 
 After a pull: **Product → Clean Build Folder** (Shift+Cmd+K), then run on your iPad.
 
-You should see **`tutor-v2 · eaca878`** under the StepOut title when the latest build is installed.
+You should see a **pink pill** under the title: **`NEW BUILD · 0a6323e`**
 
 ### Backend
 
