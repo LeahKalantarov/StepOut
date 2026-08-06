@@ -12,7 +12,9 @@ from checker.handwriting import (
 )
 from checker.lesson import teach, work_through
 from checker.parser import parse_equation, parse_latex_equation
+from checker.photo import read_photo
 from checker.problems import get_problem, list_problems
+from checker.review import review_lines
 from checker.step_checker import check_page, check_steps
 from checker.tutor import explain
 
@@ -68,6 +70,17 @@ class AskRequest(BaseModel):
     # question like "why doesn't that work" means nothing without them.
     problem: str | None = None
     work: list[str] | None = None
+
+
+class PhotoRequest(BaseModel):
+    # The photograph itself, base64 encoded. Sent in the body rather than as a
+    # file upload so it travels the same way every other request does, and the
+    # iPad does not need a second kind of networking code for one screen.
+    image_base64: str
+
+    media_type: str = "image/jpeg"
+
+    problem_index: int | None = None
 
 
 # A row has to have at least this many strokes before we spend a recognition
@@ -396,3 +409,45 @@ def work_an_example(request: AskRequest):
         )
 
     return lesson
+
+
+@app.post("/check-photo")
+def check_photograph(request: PhotoRequest):
+    """
+    Read a photograph of working, then mark it the same way as a written page.
+
+    The answer has the same shape as /check-handwriting, so the iPad shows a
+    photographed mistake exactly as it shows one made on the page — including
+    offering to teach the step, because `help` is filled in the same way.
+
+    One difference worth knowing: `error_step` counts the lines of maths read
+    off the photograph, not ruled rows on the iPad's page. There is nothing on
+    the page to draw a cross beside, so the app names the line instead.
+    """
+    try:
+        lines = read_photo(request.image_base64, request.media_type)
+        print(f"photo read as {len(lines)} line(s): {lines}")
+
+        if not lines:
+            return {
+                "ok": True,
+                "recognized": [],
+                "ignored": [],
+                # Said as something to do rather than something that failed.
+                # Nearly every unreadable photo is a photo of the right thing
+                # taken badly, and the fix is another photo.
+                "message": "I couldn't read any maths in that photo. "
+                "Try again with the page flat and the writing filling the frame.",
+            }
+
+        result = review_lines(lines, request.problem_index)
+
+        verdict = "ok" if result["ok"] else f"WRONG ({result.get('reason')})"
+        print(f"photo problem={request.problem_index} -> {verdict}")
+
+        return result
+    except Exception as error:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "message": str(error)},
+        )
