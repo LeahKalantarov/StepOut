@@ -912,19 +912,19 @@ struct ContentView: View {
         let band = NotebookLayout.lineHeight * 0.65
 
         for written in canvas.writtenLines() where abs(written.bounds.midY - lineY) < band {
-            spans.append((written.bounds.minX, written.bounds.maxX))
+            spans.append((minX: written.bounds.minX, maxX: written.bounds.maxX))
         }
 
         for written in tutorLines where written.line == lineNumber {
             spans.append((
-                written.originX,
-                written.originX + StrokeFont.width(of: written.text, height: tutorHeight)
+                minX: written.originX,
+                maxX: written.originX + StrokeFont.width(of: written.text, height: tutorHeight)
             ))
         }
 
         // The printed question sits on the first two lines and is not ink.
         if problem != nil, lineNumber <= 1 {
-            spans.append((0, pageWidth))
+            spans.append((minX: 0, maxX: pageWidth))
         }
 
         return spans.sorted { $0.minX < $1.minX }
@@ -947,14 +947,14 @@ struct ContentView: View {
                 let gap = span.minX - NotebookLayout.columnGap - cursor
 
                 if gap >= width {
-                    return (candidate, cursor, gap)
+                    return (line: candidate, originX: cursor, width: gap)
                 }
 
                 cursor = max(cursor, span.maxX + NotebookLayout.columnGap)
             }
 
             if rightEdge - cursor >= width {
-                return (candidate, cursor, rightEdge - cursor)
+                return (line: candidate, originX: cursor, width: rightEdge - cursor)
             }
         }
 
