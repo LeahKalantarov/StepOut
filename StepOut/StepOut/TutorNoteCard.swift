@@ -63,11 +63,6 @@ struct TutorNoteCard: View {
                 onRemove()
             }
         }
-        .swipeActions(edge: .trailing) {
-            Button("Remove", role: .destructive) {
-                onRemove()
-            }
-        }
     }
 }
 
