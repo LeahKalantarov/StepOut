@@ -178,6 +178,32 @@ def test_recognized_lines_come_back():
     )
 
 
+def test_working_on_the_problem_they_were_set():
+    # Problem 1 is "2x + 5 = 13". Photographed work that starts from it should
+    # be marked against it, the same as work written on the page.
+    result = review_lines(["2x + 5 = 13", "2x = 8", "x = 4"], problem_index=1, narrate=False)
+
+    check("work matching the set problem passes", result["ok"], result)
+
+
+def test_working_on_a_different_problem_is_caught():
+    # Photographing the wrong page is easy to do, and being told the answer is
+    # wrong when it is the question that is wrong would be baffling.
+    result = review_lines(["9x = 81", "x = 9"], problem_index=1, narrate=False)
+
+    check(
+        "work that is not the set problem is not silently passed",
+        not result["ok"],
+        result,
+    )
+
+
+def test_a_problem_index_nobody_has_does_not_crash():
+    result = review_lines(["2x = 8", "x = 4"], problem_index=999, narrate=False)
+
+    check("an unknown problem falls back to checking the steps alone", result["ok"], result)
+
+
 # MARK: the endpoint the iPad calls
 
 
@@ -245,6 +271,9 @@ if __name__ == "__main__":
     test_annotations_are_set_aside_not_failed()
     test_a_photo_with_no_maths_says_so()
     test_recognized_lines_come_back()
+    test_working_on_the_problem_they_were_set()
+    test_working_on_a_different_problem_is_caught()
+    test_a_problem_index_nobody_has_does_not_crash()
 
     test_endpoint_passes_good_working()
     test_endpoint_catches_a_wrong_step()

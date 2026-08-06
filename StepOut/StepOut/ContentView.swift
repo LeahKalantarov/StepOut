@@ -1459,8 +1459,10 @@ struct ContentView: View {
             } else {
                 var says: [String] = []
 
+                // Named rather than marked. The stroke font draws only what it
+                // has a glyph for, so this stays to plain characters.
                 if let step = result.errorStep, step >= 1, step - 1 < read.count {
-                    says.append("in your photo, line \(step) — \(read[step - 1]) — doesn't follow.".lowercased())
+                    says.append("in your photo, line \(step): \(read[step - 1])".lowercased())
                 }
 
                 says.append((result.message ?? "something doesn't follow.").lowercased())

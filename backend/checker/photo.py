@@ -120,7 +120,12 @@ def read_photo(image_base64, media_type="image/jpeg"):
     """
     api_key = os.getenv("OPENAI_API_KEY")
 
-    if not api_key or not looks_like_an_image(image_base64):
+    if not api_key:
+        print("photo: no OPENAI_API_KEY set, so there is nothing to read it with")
+        return []
+
+    if not looks_like_an_image(image_base64):
+        print("photo: the upload was not usable base64")
         return []
 
     try:
@@ -144,7 +149,11 @@ def read_photo(image_base64, media_type="image/jpeg"):
             ],
             max_output_tokens=600,
         )
-    except Exception:
+    except Exception as error:
+        # Said out loud rather than swallowed. The likeliest cause is a model
+        # that cannot see images, and that is a one-line fix in .env — but only
+        # if you can tell it apart from a photograph of an empty page.
+        print(f"photo: {MODEL} could not read it: {error}")
         return []
 
     return tidy_lines(reply.output_text)
