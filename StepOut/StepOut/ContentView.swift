@@ -162,6 +162,29 @@ struct ContentView: View {
                 appHeader
                 page
             }
+            // Kept on the page rather than on the whole screen: two dialogs
+            // hung off the same view get in each other's way, and the other
+            // one belongs to the More button.
+            .confirmationDialog(
+                "Tutor note",
+                isPresented: Binding(
+                    get: { batchMenu != nil },
+                    set: { if !$0 { batchMenu = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let batch = batchMenu {
+                    Button(collapsedBatches.contains(batch.id) ? "Expand" : "Collapse to one line") {
+                        toggleBatchCollapsed(batch)
+                    }
+
+                    Button("Remove", role: .destructive) {
+                        removeBatch(batch)
+                    }
+                }
+
+                Button("Cancel", role: .cancel) {}
+            }
 
             FloatingNavRail(
                 showQuestions: $showQuestions,
@@ -187,26 +210,6 @@ struct ContentView: View {
         }
         .animation(.snappy, value: showQuestions)
         .animation(.snappy, value: tutorApart)
-        .confirmationDialog(
-            "Tutor note",
-            isPresented: Binding(
-                get: { batchMenu != nil },
-                set: { if !$0 { batchMenu = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let batch = batchMenu {
-                Button(collapsedBatches.contains(batch.id) ? "Expand" : "Collapse to one line") {
-                    toggleBatchCollapsed(batch)
-                }
-
-                Button("Remove", role: .destructive) {
-                    removeBatch(batch)
-                }
-            }
-
-            Button("Cancel", role: .cancel) {}
-        }
         .confirmationDialog("More", isPresented: $showMore, titleVisibility: .hidden) {
             Button("Ask about this") {
                 checkTask = Task { await askQuestion() }
