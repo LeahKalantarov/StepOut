@@ -209,9 +209,15 @@ struct ContentView: View {
 
     var appHeader: some View {
         HStack(spacing: 16) {
-            Text("StepOut")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-                .foregroundStyle(Theme.ink)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("StepOut")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.ink)
+
+                Text(AppBuild.marker)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.ink.opacity(0.45))
+            }
 
             Spacer()
 
@@ -287,11 +293,11 @@ struct ContentView: View {
                     onScroll: { scrolledBy = $0 }
                 )
             }
-            // Fold buttons sit above the canvas. On the paper layer they never
-            // received a tap — the canvas is on top and takes every touch.
+            // Finger gestures on tutor writing sit above the canvas. Double-tap
+            // collapses; long-press opens keep / remove.
             .overlay(alignment: .topLeading) {
                 if !tutorApart {
-                    tutorFoldButtons
+                    tutorBatchGestures
                         .frame(height: pageHeight, alignment: .topLeading)
                         .offset(y: -scrolledBy)
                 }
@@ -399,31 +405,7 @@ struct ContentView: View {
                             .padding(24)
                     } else {
                         ForEach(tutorBatches) { batch in
-                            HStack(alignment: .top, spacing: 8) {
-                                batchToggle(batch)
-                                    .padding(.top, 4)
-
-                                if collapsedBatches.contains(batch.id) {
-                                    Text(batch.lines.map(\.text).joined(separator: " "))
-                                        .font(.caption)
-                                        .foregroundStyle(paper.tutorInkFaded)
-                                        .lineLimit(2)
-                                } else {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        ForEach(batch.lines) { line in
-                                            HandwrittenLine(
-                                                text: line.text,
-                                                origin: CGPoint(x: 0, y: 0),
-                                                height: tutorHeight,
-                                                color: paper.tutorInk,
-                                                delay: line.delay,
-                                                alreadyWritten: line.written
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, 16)
+                            tutorPanelBatch(batch)
                         }
                     }
                 }
@@ -518,19 +500,76 @@ struct ContentView: View {
         }
     }
 
-    /// Minus buttons above the canvas so they can actually be tapped.
-    var tutorFoldButtons: some View {
+    /// Invisible hit areas over tutor ink on the page — finger only, no buttons.
+    var tutorBatchGestures: some View {
         ZStack(alignment: .topLeading) {
             ForEach(tutorBatches) { batch in
-                batchToggle(batch)
+                tutorBatchHitArea(batch)
             }
         }
-        // No allowsHitTesting(false) here. Turning hit testing off on a
-        // container turns it off for everything inside it too, and a child
-        // cannot switch it back on — the taps went straight through to the
-        // canvas, which answered with its own "Insert Space / Select All"
-        // menu. A ZStack only tests the views actually in it, so the blank
-        // paper around these buttons still takes pen strokes.
+    }
+
+    func tutorBatchHitArea(_ batch: TutorBatch) -> some View {
+        let bounds = batchBounds(batch)
+
+        return Color.clear
+            .frame(width: bounds.width, height: bounds.height)
+            .contentShape(Rectangle())
+            .offset(x: bounds.minX, y: bounds.minY)
+            .onTapGesture(count: 2) {
+                toggleBatchCollapsed(batch)
+            }
+            .contextMenu {
+                tutorBatchMenu(batch)
+            }
+    }
+
+    func tutorPanelBatch(_ batch: TutorBatch) -> some View {
+        Group {
+            if collapsedBatches.contains(batch.id) {
+                Text(batch.lines.map(\.text).joined(separator: " "))
+                    .font(.caption)
+                    .foregroundStyle(paper.tutorInkFaded)
+                    .lineLimit(2)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(batch.lines) { line in
+                        HandwrittenLine(
+                            text: line.text,
+                            origin: CGPoint(x: 0, y: 0),
+                            height: tutorHeight,
+                            color: paper.tutorInk,
+                            delay: line.delay,
+                            alreadyWritten: line.written
+                        )
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            toggleBatchCollapsed(batch)
+        }
+        .contextMenu {
+            tutorBatchMenu(batch)
+        }
+    }
+
+    @ViewBuilder
+    func tutorBatchMenu(_ batch: TutorBatch) -> some View {
+        let folded = collapsedBatches.contains(batch.id)
+
+        Button(folded ? "Expand" : "Collapse to one line") {
+            toggleBatchCollapsed(batch)
+        }
+
+        Divider()
+
+        Button("Remove", role: .destructive) {
+            removeBatch(batch)
+        }
     }
 
     /// One line of summary when a batch is folded away.
@@ -546,37 +585,38 @@ struct ContentView: View {
             .padding(.top, NotebookLayout.penStart(onLine: batch.firstLine).y - tutorHeight)
     }
 
-    /// Fold a batch away, or open it again.
-    func batchToggle(_ batch: TutorBatch) -> some View {
-        let folded = collapsedBatches.contains(batch.id)
+    func batchBounds(_ batch: TutorBatch) -> CGRect {
+        let originX = batch.lines.first?.originX ?? NotebookLayout.marginWidth + 16
+        let firstLine = batch.firstLine
+        let lastLine = batch.lines.map(\.line).max() ?? firstLine
+        let rightEdge = batch.lines.map { line in
+            line.originX + StrokeFont.width(of: line.text, height: tutorHeight)
+        }.max() ?? originX + 120
 
-        return Button {
-            if folded {
-                collapsedBatches.remove(batch.id)
-            } else {
-                // Folding takes the lines off the screen, and unfolding builds
-                // them again from nothing — so anything still being written
-                // started over from the left margin when it came back. Calling
-                // the batch written settles that: it reopens finished.
-                //
-                // Better than carrying on where it left off, too. Folding
-                // something away is not a request to sit and watch the rest of
-                // it appear.
-                markWritten(batch.id)
-                collapsedBatches.insert(batch.id)
-            }
-        } label: {
-            Image(systemName: folded ? "plus.circle.fill" : "minus.circle.fill")
-                .font(.title2)
-                .foregroundStyle(paper.tutorInk)
-                .padding(9)
-                .background(.ultraThinMaterial, in: Circle())
-                // The whole circle takes the tap, not just the glyph inside it.
-                .contentShape(Circle())
+        let top = NotebookLayout.penStart(onLine: firstLine).y - tutorHeight - 6
+        let bottom = NotebookLayout.penStart(onLine: lastLine).y + 10
+
+        return CGRect(
+            x: originX - 10,
+            y: top,
+            width: max(72, rightEdge - originX + 20),
+            height: max(NotebookLayout.lineHeight * 0.6, bottom - top)
+        )
+    }
+
+    func toggleBatchCollapsed(_ batch: TutorBatch) {
+        if collapsedBatches.contains(batch.id) {
+            collapsedBatches.remove(batch.id)
+        } else {
+            markWritten(batch.id)
+            collapsedBatches.insert(batch.id)
         }
-        .buttonStyle(.plain)
-        .padding(.leading, batch.lines.first?.originX ?? NotebookLayout.marginWidth)
-        .padding(.top, CGFloat(batch.firstLine) * NotebookLayout.lineHeight + 4)
+    }
+
+    func removeBatch(_ batch: TutorBatch) {
+        collapsedBatches.remove(batch.id)
+        tutorLines.removeAll { $0.batch == batch.id }
+        growPage()
     }
 
     /// Ticks and crosses in the left margin, beside the line they refer to.
