@@ -17,6 +17,13 @@ struct ContentView: View {
     @State private var errorLine: Int?
     @State private var solvedLine: Int?
 
+    // Where on the page those two lines were written, so the writing itself
+    // can be marked and not just the margin beside it. A tick eight inches to
+    // the left of the answer is a footnote; a ring around the answer is the
+    // thing a teacher actually does with a red pen.
+    @State private var errorInk: CGRect?
+    @State private var solvedInk: CGRect?
+
     @State private var feedback: Feedback?
 
     // True while we wait on the server, so Check can't be tapped twice. Only
@@ -31,6 +38,15 @@ struct ContentView: View {
     // Counts down to hiding the feedback note.
     @State private var feedbackTask: Task<Void, Never>?
 
+    // The page: how it is ruled, what shade, and every ink colour that
+    // depends on those.
+    @State private var paper = Paper()
+
+    // True while the tutor is waiting on the server. Without a sign of this,
+    // a lesson that takes a few seconds looks like nothing happening, and the
+    // obvious thing to do is press Check.
+    @State private var thinking = false
+
     // MARK: Asking for help
 
     // What the tutor has offered. Non-nil means the question is on the page
@@ -41,9 +57,18 @@ struct ContentView: View {
     // can be asked with the working attached.
     @State private var lastRead: [String] = []
 
-    // The line the question was written on. The answer is whatever is written
-    // below it, so the two have to stay tied together.
+    // The step that was wrong last time, to notice when it is the same one
+    // coming back rather than a fresh mistake.
+    @State private var lastWrongLine: String?
+
+    // The line the question was written on. Kept for placing a reply on the
+    // page, but strokes written after the offer are what we actually read.
     @State private var offerLine: Int?
+
+    // How much ink was on the page when the question appeared. Anything added
+    // after that is treated as the answer, which is far more reliable than
+    // guessing from height alone.
+    @State private var strokesWhenOffered = 0
 
     // What the answer was last read as. Held on to so that a reply is only
     // acted on when it changes, rather than every time a stroke moves.
@@ -83,6 +108,16 @@ struct ContentView: View {
     @State private var writingBatch: UUID?
     @State private var writingTask: Task<Void, Never>?
 
+    // Batches the student has folded away so the tutor's writing does not
+    // keep eating the page.
+    @State private var collapsedBatches: Set<UUID> = []
+
+    // How wide the notebook is, so the tutor can use the full line.
+    @State private var pageWidth: CGFloat = 700
+
+    @State private var showQuestions = false
+    @State private var showMore = false
+
     private var problem: Problem? {
         problems.indices.contains(currentIndex) ? problems[currentIndex] : nil
     }
@@ -95,63 +130,122 @@ struct ContentView: View {
     /// and half-written text does not jump about mid-sentence.
     private let tutorWidth: CGFloat = 380
 
-    /// Height of the tutor's handwriting, a little smaller than the question.
-    private let tutorHeight: CGFloat = 22
+    /// How wide the tutor writes. Full width on the page; fixed in the panel
+    /// so toggling layouts does not have to re-break every line.
+    private var tutorWritableWidth: CGFloat {
+        tutorApart ? tutorWidth : max(200, pageWidth - NotebookLayout.marginWidth - 24)
+    }
 
-    /// Lines sit closer together in the panel than on ruled paper, which has to
-    /// leave room for a student's writing between the rules.
-    private let panelLineHeight: CGFloat = 38
+    /// Height of the tutor's handwriting — a little smaller than the question.
+    private let tutorHeight: CGFloat = 18
+
+    /// Lines sit closer together in the panel than on ruled paper.
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-        } detail: {
-            page
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                appHeader
+                page
+            }
+
+            FloatingNavRail(
+                showQuestions: $showQuestions,
+                tutorApart: $tutorApart,
+                showMore: $showMore,
+                isChecking: isChecking
+            ) {
+                checkTask = Task { await runCheck() }
+            }
+            .padding(.leading, 10)
+            .padding(.top, 76)
+
+            if showQuestions {
+                QuestionsDrawer(
+                    problems: problems,
+                    currentIndex: currentIndex,
+                    solvedProblems: solvedProblems,
+                    onSelect: select,
+                    onClose: { showQuestions = false }
+                )
+                .transition(.move(edge: .leading))
+            }
+        }
+        .animation(.snappy, value: showQuestions)
+        .animation(.snappy, value: tutorApart)
+        .confirmationDialog("More", isPresented: $showMore, titleVisibility: .hidden) {
+            Button("Ask about this") {
+                checkTask = Task { await askQuestion() }
+            }
+            .disabled(isChecking)
+
+            Button(tutorApart ? "Tutor on the page" : "Tutor in its own panel") {
+                tutorApart.toggle()
+            }
+
+            Button("Undo") {
+                canvas.undoManager?.undo()
+            }
+
+            Button("Redo") {
+                canvas.undoManager?.redo()
+            }
+
+            Button("Clear page", role: .destructive) {
+                clearPage()
+            }
+
+            Button("Cancel", role: .cancel) {}
         }
         .task {
             await loadProblems()
         }
-    }
-
-    // MARK: - The list of questions
-
-    var sidebar: some View {
-        List {
-            Section("Questions") {
-                ForEach(problems) { problem in
-                    Button {
-                        select(problem)
-                    } label: {
-                        row(for: problem)
-                    }
-                    .listRowBackground(
-                        problem.index == currentIndex
-                            ? Color.accentColor.opacity(0.12)
-                            : Color.clear
-                    )
-                }
-            }
+        .onChange(of: paper.shade) {
+            pen.follow(paper)
         }
-        .listStyle(.sidebar)
-        .navigationTitle("StepOut")
+        .tint(Theme.pink)
     }
 
-    func row(for problem: Problem) -> some View {
-        HStack(spacing: 12) {
-            Text("\(problem.index + 1)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 14, alignment: .trailing)
+    // MARK: - Header
 
-            Text(problem.equation)
-                .foregroundStyle(.primary)
+    var appHeader: some View {
+        HStack(spacing: 16) {
+            Text("StepOut")
+                .font(.system(size: 26, weight: .bold, design: .rounded))
+                .foregroundStyle(Theme.ink)
 
             Spacer()
 
-            if solvedProblems.contains(problem.index) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+            if !problems.isEmpty {
+                Text("\(currentIndex + 1) of \(problems.count)")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .brutalBorder(radius: 20, lineWidth: 1.5)
             }
+
+            Button {
+                checkTask = Task { await runCheck() }
+            } label: {
+                Text(isChecking ? "Checking…" : "Check")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Theme.pink, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.ink, lineWidth: Theme.outline))
+            }
+            .buttonStyle(.plain)
+            .disabled(isChecking)
+            .opacity(isChecking ? 0.6 : 1)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(Theme.paper)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.ink.opacity(0.08))
+                .frame(height: 1)
         }
     }
 
@@ -170,8 +264,6 @@ struct ContentView: View {
             }
         }
         .animation(.snappy, value: tutorApart)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { pageTools }
     }
 
     var notebook: some View {
@@ -179,8 +271,9 @@ struct ContentView: View {
         // which runs well past the bottom of the screen — has no say in how
         // big this view is. What is on screen stays one screenful.
         Color(.systemBackground)
+            .background(Theme.paper)
             .overlay(alignment: .topLeading) {
-                paper
+                paperLayer
                     .frame(height: pageHeight, alignment: .top)
                     .offset(y: -scrolledBy)
             }
@@ -194,20 +287,44 @@ struct ContentView: View {
                     onScroll: { scrolledBy = $0 }
                 )
             }
+            // Fold buttons sit above the canvas. On the paper layer they never
+            // received a tap — the canvas is on top and takes every touch.
+            .overlay(alignment: .topLeading) {
+                if !tutorApart {
+                    tutorFoldButtons
+                        .frame(height: pageHeight, alignment: .topLeading)
+                        .offset(y: -scrolledBy)
+                }
+            }
             .clipped()
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                visibleHeight = height
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                pageWidth = size.width
+                visibleHeight = size.height
                 growPage()
             }
             .overlay(alignment: .bottomTrailing) {
                 VStack(alignment: .trailing, spacing: 12) {
+                    if thinking {
+                        HStack(spacing: 10) {
+                            ProgressView().controlSize(.small)
+
+                            Text("Working it out…")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
+                        .brutalBorder(radius: 24)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+
                     if writingSince != nil {
                         Button("Stop", systemImage: "stop.fill") {
                             stopWriting()
                         }
                         .labelStyle(.titleAndIcon)
                         .buttonStyle(.borderedProminent)
-                        .tint(.indigo)
+                        .tint(Theme.pink)
                         .transition(.scale.combined(with: .opacity))
                     }
 
@@ -215,26 +332,30 @@ struct ContentView: View {
                     // the question" once the tutor has its own panel, so the
                     // same two answers are always here to be tapped.
                     if offer != nil, answered == nil {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 10) {
+                            Text("Want a hand?")
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(.secondary)
+
                             Button("Yes") { replyTask = Task { await answer(.yes) } }
                                 .buttonStyle(.borderedProminent)
-                                .tint(.indigo)
+                                .tint(Theme.pink)
 
                             Button("No") { replyTask = Task { await answer(.no) } }
                                 .buttonStyle(.bordered)
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
+                        .brutalBorder(radius: 24)
                         .transition(.scale.combined(with: .opacity))
                     }
 
-                    PenPalette(
-                        pen: pen,
-                        undo: { canvas.undoManager?.undo() },
-                        redo: { canvas.undoManager?.redo() }
-                    )
+                    PenPalette(pen: pen, paper: paper)
                 }
                 .padding(20)
                 .animation(.snappy, value: writingSince)
                 .animation(.snappy, value: answered)
+                .animation(.snappy, value: thinking)
             }
             .overlay(alignment: .top) {
                 if let feedback {
@@ -247,107 +368,86 @@ struct ContentView: View {
             }
     }
 
-    @ToolbarContentBuilder
-    var pageTools: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            if !problems.isEmpty {
-                Text("\(currentIndex + 1) of \(problems.count)")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(.quaternary, in: Capsule())
-            }
-        }
-
-        ToolbarItem(placement: .topBarTrailing) {
-            Button(
-                tutorApart ? "Tutor on the page" : "Tutor in its own panel",
-                systemImage: tutorApart ? "rectangle" : "rectangle.righthalf.inset.filled"
-            ) {
-                tutorApart.toggle()
-            }
-            .labelStyle(.iconOnly)
-        }
-
-        ToolbarItem(placement: .topBarTrailing) {
-            Button("Ask about this", systemImage: "questionmark.bubble") {
-                checkTask = Task { await askQuestion() }
-            }
-            .labelStyle(.iconOnly)
-            .disabled(isChecking)
-        }
-
-        ToolbarItem(placement: .topBarTrailing) {
-            // A bin, not a circular arrow: the palette's undo arrow is right
-            // there on the same page and means something else.
-            Button("Clear page", systemImage: "trash") {
-                clearPage()
-            }
-            .labelStyle(.iconOnly)
-        }
-
-        ToolbarItem(placement: .topBarTrailing) {
-            Button {
-                checkTask = Task {
-                    await runCheck()
-                }
-            } label: {
-                // Spelled out on purpose. A toolbar shows icons alone by
-                // default, and the one button the student has to find should
-                // not be an unlabelled dot.
-                Label(isChecking ? "Checking" : "Check my work", systemImage: "checkmark")
-                    .labelStyle(.titleAndIcon)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(isChecking)
-        }
-    }
-
     /// Where the tutor writes when it is kept off the student's page.
     ///
     /// Lines are laid out one after another here rather than at the ruled line
     /// they were given, because those numbers describe a place on the notebook
     /// page and mean nothing over here.
     var tutorPanel: some View {
-        ScrollView {
-            ZStack(alignment: .topLeading) {
-                ForEach(Array(tutorLines.enumerated()), id: \.element.id) { place, written in
-                    HandwrittenLine(
-                        text: written.text,
-                        origin: CGPoint(
-                            x: 24,
-                            y: CGFloat(place + 1) * panelLineHeight
-                        ),
-                        height: tutorHeight,
-                        color: .indigo.opacity(0.8),
-                        delay: written.delay
-                    )
-                }
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "graduationcap.fill")
+                    .font(.footnote)
+                    .foregroundStyle(paper.tutorInk)
 
-                if tutorLines.isEmpty {
-                    Text("The tutor writes here.")
-                        .font(.footnote)
-                        .foregroundStyle(.tertiary)
-                        .padding(24)
-                }
+                Text("Tutor")
+                    .font(.subheadline.weight(.semibold))
+
+                Spacer()
             }
-            .frame(
-                maxWidth: .infinity,
-                minHeight: CGFloat(tutorLines.count + 2) * panelLineHeight,
-                alignment: .topLeading
-            )
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if tutorLines.isEmpty {
+                        Text("Nothing yet. Check your math, or ask a question.")
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
+                            .padding(24)
+                    } else {
+                        ForEach(tutorBatches) { batch in
+                            HStack(alignment: .top, spacing: 8) {
+                                batchToggle(batch)
+                                    .padding(.top, 4)
+
+                                if collapsedBatches.contains(batch.id) {
+                                    Text(batch.lines.map(\.text).joined(separator: " "))
+                                        .font(.caption)
+                                        .foregroundStyle(paper.tutorInkFaded)
+                                        .lineLimit(2)
+                                } else {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        ForEach(batch.lines) { line in
+                                            HandwrittenLine(
+                                                text: line.text,
+                                                origin: CGPoint(x: 0, y: 0),
+                                                height: tutorHeight,
+                                                color: paper.tutorInk,
+                                                delay: line.delay,
+                                                alreadyWritten: line.written
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 16)
+            }
         }
-        .background(Color(.secondarySystemBackground))
+        .background(Theme.paper)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Theme.ink)
+                .frame(width: Theme.outline)
+        }
     }
 
     /// Everything printed or written on the paper, behind the canvas.
     ///
     /// This is one tall layer that slides up as the canvas scrolls, so a ruled
     /// line and the ink resting on it never come apart.
-    var paper: some View {
+    var paperLayer: some View {
         ZStack(alignment: .topLeading) {
-            RuledPaper()
+            RuledPaper(paper: paper)
+
+            inkMarks
 
             marginMarks
 
@@ -356,12 +456,14 @@ struct ContentView: View {
             if let problem {
                 HandwrittenLine(
                     text: problem.prompt,
-                    origin: NotebookLayout.penStart(onLine: 0)
+                    origin: NotebookLayout.penStart(onLine: 0),
+                    color: paper.questionInk
                 )
 
                 HandwrittenLine(
                     text: problem.equation,
                     origin: NotebookLayout.penStart(onLine: 1),
+                    color: paper.questionInk,
                     delay: HandwrittenLine.writingTime(for: problem.prompt) + 0.25
                 )
             }
@@ -372,20 +474,109 @@ struct ContentView: View {
         }
     }
 
+    /// The tutor's writing, grouped by sitting so each can be folded away.
+    var tutorBatches: [TutorBatch] {
+        var order: [UUID] = []
+        var grouped: [UUID: [TutorLine]] = [:]
+
+        for line in tutorLines {
+            if grouped[line.batch] == nil {
+                order.append(line.batch)
+            }
+            grouped[line.batch, default: []].append(line)
+        }
+
+        return order.compactMap { batch in
+            guard let lines = grouped[batch], let kind = lines.first?.kind else { return nil }
+            return TutorBatch(id: batch, kind: kind, lines: lines)
+        }
+    }
+
     /// The tutor's lesson, written out below the student's own work.
     ///
     /// Each line waits for the ones above it to finish, so the page fills the
     /// way a person would fill it rather than all at once.
     var lessonOnThePage: some View {
-        ForEach(tutorLines) { written in
-            HandwrittenLine(
-                text: written.text,
-                origin: NotebookLayout.penStart(onLine: written.line),
-                height: tutorHeight,
-                color: .indigo.opacity(0.75),
-                delay: written.delay
-            )
+        ZStack(alignment: .topLeading) {
+            ForEach(tutorBatches) { batch in
+                if collapsedBatches.contains(batch.id) {
+                    collapsedBatch(batch)
+                } else {
+                    ForEach(batch.lines) { line in
+                        HandwrittenLine(
+                            text: line.text,
+                            origin: NotebookLayout.penStart(onLine: line.line, x: line.originX),
+                            height: tutorHeight,
+                            color: paper.tutorInk,
+                            delay: line.delay,
+                            alreadyWritten: line.written
+                        )
+                    }
+                }
+
+            }
         }
+    }
+
+    /// Minus buttons above the canvas so they can actually be tapped.
+    var tutorFoldButtons: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(tutorBatches) { batch in
+                batchToggle(batch)
+            }
+        }
+        // No allowsHitTesting(false) here. Turning hit testing off on a
+        // container turns it off for everything inside it too, and a child
+        // cannot switch it back on — the taps went straight through to the
+        // canvas, which answered with its own "Insert Space / Select All"
+        // menu. A ZStack only tests the views actually in it, so the blank
+        // paper around these buttons still takes pen strokes.
+    }
+
+    /// One line of summary when a batch is folded away.
+    func collapsedBatch(_ batch: TutorBatch) -> some View {
+        let summary = batch.lines.map(\.text).joined(separator: " ")
+
+        return Text(summary)
+            .font(.caption)
+            .foregroundStyle(paper.tutorInkFaded)
+            .lineLimit(1)
+            .frame(maxWidth: pageWidth - (batch.lines.first?.originX ?? NotebookLayout.marginWidth) - 24, alignment: .leading)
+            .padding(.leading, batch.lines.first?.originX ?? NotebookLayout.marginWidth + 16)
+            .padding(.top, NotebookLayout.penStart(onLine: batch.firstLine).y - tutorHeight)
+    }
+
+    /// Fold a batch away, or open it again.
+    func batchToggle(_ batch: TutorBatch) -> some View {
+        let folded = collapsedBatches.contains(batch.id)
+
+        return Button {
+            if folded {
+                collapsedBatches.remove(batch.id)
+            } else {
+                // Folding takes the lines off the screen, and unfolding builds
+                // them again from nothing — so anything still being written
+                // started over from the left margin when it came back. Calling
+                // the batch written settles that: it reopens finished.
+                //
+                // Better than carrying on where it left off, too. Folding
+                // something away is not a request to sit and watch the rest of
+                // it appear.
+                markWritten(batch.id)
+                collapsedBatches.insert(batch.id)
+            }
+        } label: {
+            Image(systemName: folded ? "plus.circle.fill" : "minus.circle.fill")
+                .font(.title2)
+                .foregroundStyle(paper.tutorInk)
+                .padding(9)
+                .background(.ultraThinMaterial, in: Circle())
+                // The whole circle takes the tap, not just the glyph inside it.
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, batch.lines.first?.originX ?? NotebookLayout.marginWidth)
+        .padding(.top, CGFloat(batch.firstLine) * NotebookLayout.lineHeight + 4)
     }
 
     /// Ticks and crosses in the left margin, beside the line they refer to.
@@ -399,6 +590,38 @@ struct ContentView: View {
                 mark("✓", color: .green, onLine: solvedLine)
             }
         }
+    }
+
+    /// The verdict drawn onto the writing itself.
+    ///
+    /// Sits behind the canvas with the rest of the paper, so it reads as
+    /// something on the page rather than something floating over it, and it
+    /// never takes a touch meant for the pen.
+    var inkMarks: some View {
+        ZStack(alignment: .topLeading) {
+            if let solvedInk {
+                highlight(solvedInk, color: .green)
+            }
+
+            if let errorInk {
+                highlight(errorInk, color: .red)
+            }
+        }
+    }
+
+    /// A soft band behind one line of writing, the width of the writing.
+    func highlight(_ ink: CGRect, color: Color) -> some View {
+        let padded = ink.insetBy(dx: -10, dy: -6)
+
+        return RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(color.opacity(paper.isDark ? 0.28 : 0.16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(color.opacity(0.45), lineWidth: 1.5)
+            )
+            .frame(width: padded.width, height: padded.height)
+            .offset(x: padded.minX, y: padded.minY)
+            .transition(.opacity)
     }
 
     /// Place one mark in the margin, level with a given ruled line.
@@ -434,10 +657,14 @@ struct ContentView: View {
         canvas.erasePage()
         errorLine = nil
         solvedLine = nil
+        errorInk = nil
+        solvedInk = nil
         stopListening()
         writingTask?.cancel()
         writingSince = nil
         tutorLines = []
+        lastWrongLine = nil
+        collapsedBatches = []
         hideFeedback()
 
         canvas.setContentOffset(.zero, animated: false)
@@ -450,19 +677,42 @@ struct ContentView: View {
     ///
     /// Sentences are broken to fit the page first. A path does not wrap on its
     /// own; left alone it would run straight off the edge of the paper.
-    func tutorWrites(_ sentences: [String], kind: TutorLine.Kind = .remark) {
-        var line = nextFreeLine()
+    func tutorWrites(
+        _ sentences: [String],
+        kind: TutorLine.Kind = .remark,
+        nearLine: Int? = nil,
+        beside bounds: CGRect? = nil
+    ) {
+        var line: Int
+        var originX: CGFloat
         var delay = 0.0
 
+        if kind == .lesson, let last = tutorLines.last {
+            line = last.line + 1
+            originX = last.originX
+        } else {
+            let anchor = nextTutorAnchor(nearLine: nearLine, beside: bounds)
+            line = anchor.line
+            originX = anchor.originX
+        }
+
         let batch = UUID()
+        let columnWidth = max(160, pageWidth - originX - 24)
 
         for sentence in sentences {
-            for text in StrokeFont.wrap(sentence, height: tutorHeight, into: tutorWidth) {
+            for text in StrokeFont.wrap(sentence, height: tutorHeight, into: columnWidth) {
                 tutorLines.append(
-                    TutorLine(batch: batch, kind: kind, text: text, line: line, delay: delay)
+                    TutorLine(
+                        batch: batch,
+                        kind: kind,
+                        text: text,
+                        line: line,
+                        originX: originX,
+                        delay: delay
+                    )
                 )
 
-                delay += HandwrittenLine.writingTime(for: text) + 0.15
+                delay += HandwrittenLine.writingTime(for: text) + 0.05
                 line += 1
             }
         }
@@ -484,7 +734,15 @@ struct ContentView: View {
 
             if !Task.isCancelled {
                 writingSince = nil
+                markWritten(batch)
             }
+        }
+    }
+
+    /// Note that a batch is finished, so it is never written out twice.
+    func markWritten(_ batch: UUID) {
+        for spot in tutorLines.indices where tutorLines[spot].batch == batch {
+            tutorLines[spot].written = true
         }
     }
 
@@ -501,36 +759,68 @@ struct ContentView: View {
 
         writingTask?.cancel()
         writingSince = nil
+        markWritten(batch)
 
         // A lesson still on its way would otherwise arrive and start writing
         // itself moments after being told to stop.
         replyTask?.cancel()
     }
 
-    /// The first ruled line below everything already on the page.
-    ///
-    /// Counts the tutor's own writing as well as the student's, so a lesson
-    /// never lands on top of the words that introduced it.
-    func nextFreeLine() -> Int {
-        var lowest = max(1, lastInkedLine())
+    /// Place the tutor beside the student's ink on the line being discussed —
+    /// not at the top of the page, not forced to the right half.
+    func nextTutorAnchor(nearLine: Int? = nil, beside bounds: CGRect? = nil) -> (line: Int, originX: CGFloat) {
+        let working = canvas.workingLines(pageWidth: pageWidth)
+        var targetLine = nearLine ?? working.last?.lineNumber ?? errorLine ?? 2
+
+        if let bounds {
+            targetLine = nearLine ?? max(0, Int(bounds.midY / NotebookLayout.lineHeight))
+        }
+
+        var rightEdge = bounds?.maxX ?? canvas.rightEdgeOfInk(onLine: targetLine, pageWidth: pageWidth)
+
+        for written in tutorLines where written.line == targetLine {
+            rightEdge = max(
+                rightEdge,
+                written.originX + StrokeFont.width(of: written.text, height: tutorHeight)
+            )
+        }
+
+        var originX = rightEdge + NotebookLayout.columnGap
+        var line = targetLine
+
+        // Not enough room on this line — drop one line, stay beside their work.
+        if originX + 80 > pageWidth - 20 {
+            line = targetLine + 1
+            originX = canvas.rightEdgeOfInk(onLine: line, pageWidth: pageWidth) + NotebookLayout.columnGap
+            if originX + 80 > pageWidth - 20 {
+                originX = NotebookLayout.penStart(onLine: line).x
+            }
+        }
+
+        // Earlier tutor notes in this column stay visible. Start below them
+        // rather than on top of them when a recheck brings fresh feedback.
+        let columnLines = tutorLines.filter { abs($0.originX - originX) < 48 }
+        if let lowest = columnLines.map(\.line).max(), lowest >= line {
+            line = lowest + 1
+        }
+
+        return (line, originX)
+    }
+
+    /// The lowest ruled line anything occupies, for growing the page.
+    func lowestUsedLine() -> Int {
+        var lowest = 0
+
+        let ink = canvas.drawing.bounds
+        if !ink.isNull {
+            lowest = Int(ink.maxY / NotebookLayout.lineHeight)
+        }
 
         for written in tutorLines {
             lowest = max(lowest, written.line)
         }
 
-        return lowest + 2
-    }
-
-    /// The lowest ruled line the student has written anything on.
-    ///
-    /// Read from the drawing's bounds rather than by grouping the strokes into
-    /// lines, because this is checked on every stroke and grouping walks every
-    /// point of every stroke.
-    func lastInkedLine() -> Int {
-        let ink = canvas.drawing.bounds
-        guard !ink.isNull else { return 0 }
-
-        return Int(ink.maxY / NotebookLayout.lineHeight)
+        return lowest
     }
 
     /// Keep blank paper below the last thing written.
@@ -542,16 +832,29 @@ struct ContentView: View {
     /// leaves a screenful of room below the writing so there is always
     /// somewhere to carry on.
     func growPage() {
-        var lowest = lastInkedLine()
+        var lowest = lowestUsedLine()
 
-        for written in tutorLines {
-            lowest = max(lowest, written.line)
+        for batch in tutorBatches {
+            if collapsedBatches.contains(batch.id) {
+                lowest = max(lowest, batch.firstLine)
+            } else if let last = batch.lines.last?.line {
+                lowest = max(lowest, last)
+            }
         }
 
         let wanted = CGFloat(lowest) * NotebookLayout.lineHeight + visibleHeight
         let leastPage = CGFloat(NotebookLayout.leastLines) * NotebookLayout.lineHeight
 
         pageHeight = max(max(visibleHeight, leastPage), wanted)
+    }
+
+    /// Start waiting for an answer to a question on the page.
+    func markOffer(_ newOffer: Offer) {
+        offer = newOffer
+        strokesWhenOffered = canvas.drawing.strokes.count
+        offerLine = tutorLines.last?.line
+        answered = nil
+        answerSeen = nil
     }
 
     /// Scroll down far enough to see a given line, if it is below the fold.
@@ -573,51 +876,80 @@ struct ContentView: View {
     }
 
 
-    func stopListening() {
-        replyTask?.cancel()
+    /// Drop the open question. Leaves `answered` alone — the caller may have
+    /// just set it.
+    func clearOffer() {
         offer = nil
         offerLine = nil
-        answered = nil
+        strokesWhenOffered = 0
         answerSeen = nil
     }
 
-    /// The ink written in answer to the question.
+    func stopListening() {
+        replyTask?.cancel()
+        replyTask = nil
+        clearOffer()
+        answered = nil
+    }
+
+    /// The ink written in reply to the tutor's question.
     ///
-    /// Found by where it sits rather than by when it arrived: everything below
-    /// the line the question is on, down to whatever the tutor wrote next.
-    ///
-    /// Reading it back off the page like this is what lets the answer be
-    /// changed. Counting the strokes that came after the question would work
-    /// once and once only — rub the answer out and the count simply goes down,
-    /// with nothing to say the question is open again.
+    /// Anything added after the question appeared counts. "Yes" is often written
+    /// beside the student's work on the mistake line, not underneath the
+    /// tutor's "want a hand?" — so both those lines count as reply territory.
     func replyInk() -> [PKStroke] {
-        guard let offerLine else { return [] }
+        guard offer != nil else { return [] }
 
-        let below = tutorLines.filter { $0.line > offerLine }.map(\.line).min()
+        let sinceOffer = Array(canvas.drawing.strokes.dropFirst(strokesWhenOffered))
+        guard !sinceOffer.isEmpty else { return [] }
 
-        let top = CGFloat(offerLine + 1) * NotebookLayout.lineHeight
-        let bottom = below.map { CGFloat($0) * NotebookLayout.lineHeight }
-
-        return canvas.drawing.strokes.filter { stroke in
-            let height = stroke.renderBounds.midY
-            return height >= top && height < (bottom ?? .greatestFiniteMagnitude)
+        if tutorApart {
+            return Array(sinceOffer.suffix(8))
         }
+
+        let band = NotebookLayout.lineHeight * 0.7
+        var replyLines = Set<Int>()
+        if let offerLine { replyLines.insert(offerLine) }
+        if let errorLine { replyLines.insert(errorLine) }
+
+        let filtered = sinceOffer.filter { stroke in
+            let bounds = stroke.renderBounds
+            let y = bounds.midY
+
+            // On or just below the question, or on the line that was wrong.
+            if replyLines.contains(where: { abs(y - NotebookLayout.penStart(onLine: $0).y) < band }) {
+                return true
+            }
+
+            // Written to the right of the student's work — a short reply beside
+            // the algebra, not a new step underneath it.
+            if let errorLine {
+                let workEdge = canvas.rightEdgeOfInk(onLine: errorLine, pageWidth: pageWidth)
+                let lineY = NotebookLayout.penStart(onLine: errorLine).y
+                if abs(y - lineY) < band, bounds.minX >= workEdge - 12 {
+                    return true
+                }
+            }
+
+            if let offerLine, y >= NotebookLayout.penStart(onLine: offerLine).y - 8 {
+                return true
+            }
+
+            return false
+        }
+
+        return Array((filtered.isEmpty ? sinceOffer : filtered).suffix(8))
     }
 
     /// The student has written something. If we asked them a question, this
     /// might be the answer — or a change of mind about the last one.
     func noticeWriting() {
-        // With the tutor in its own panel there is no "underneath the
-        // question" on this page, and reading the ink there anyway would take
-        // the student's next step for an answer. The buttons handle it.
-        guard offer != nil, !tutorApart else { return }
+        guard offer != nil else { return }
 
-        // Wait for them to stop. Every stroke lands here, so reading after the
-        // first one would try to make a word out of a single letter.
         replyTask?.cancel()
 
         replyTask = Task {
-            try? await Task.sleep(for: .seconds(1.2))
+            try? await Task.sleep(for: .seconds(0.8))
 
             if !Task.isCancelled {
                 await readReply()
@@ -648,16 +980,11 @@ struct ContentView: View {
 
         do {
             let words = try await readWords([RowData(strokes: coordinates(of: ink))])
-            let said = words.joined().lowercased().filter(\.isLetter)
 
-            let reply: Reply? =
-                said.hasPrefix("yes") || said == "y" ? .yes :
-                said.hasPrefix("no") || said == "n" ? .no : nil
-
-            // Anything else is left alone: they have most likely gone back to
-            // working on the problem, and interrupting that to teach at them
-            // would be worse than missing a quiet "sure".
-            guard let reply, reply != answered else { return }
+            // Anything that isn't a reply is left alone: they have most likely
+            // gone back to working on the problem, and interrupting that to
+            // teach at them would be worse than missing a quiet "sure".
+            guard let reply = Reply.read(words), reply != answered else { return }
 
             await answer(reply)
         } catch {
@@ -668,21 +995,30 @@ struct ContentView: View {
 
     /// Act on a yes or a no, however it arrived — written or tapped.
     func answer(_ reply: Reply) async {
-        guard let offer else { return }
+        guard let currentOffer = offer else { return }
 
         answered = reply
+        clearOffer()
 
-        switch (reply, offer) {
+        switch (reply, currentOffer) {
         case (.yes, .help(let help)):
+            tutorWrites(
+                ["sure — one moment."],
+                nearLine: errorLine ?? tutorLines.last?.line,
+                beside: errorInk
+            )
             await write { try await fetchLesson(for: help) }
 
         case (.yes, .example(let question)):
+            tutorWrites(["sure — one moment."], kind: .lesson, nearLine: tutorLines.last?.line)
             await write { try await fetchWorkedExample(for: question) }
 
         case (.no, _):
-            // If this is a change of mind, what they no longer want goes too.
-            tutorLines.removeAll { $0.kind == .lesson }
-            tutorWrites(["no problem. give it another go."])
+            tutorWrites(
+                ["no problem. give it another go."],
+                nearLine: errorLine ?? tutorLines.last?.line,
+                beside: errorInk
+            )
         }
     }
 
@@ -692,10 +1028,21 @@ struct ContentView: View {
     /// mistake and a question are asked about at different addresses but write
     /// out exactly the same once they arrive.
     func write(_ fetch: () async throws -> Lesson) async {
+        thinking = true
+        defer { thinking = false }
+
         do {
             tutorWrites(try await fetch().lines, kind: .lesson)
+        } catch is CancellationError {
+            return
         } catch {
-            tutorWrites(["sorry, i can't explain that one."])
+            if Task.isCancelled { return }
+            // Says what actually happened. A lesson is only ever thrown away
+            // because it failed the same checker that marks the student's
+            // work, and "I can't explain that" sounds like the tutor does not
+            // understand the topic rather than that it declined to write
+            // something it could not stand behind.
+            tutorWrites(["i couldn't put together an example i'd trust for that one."])
         }
     }
 
@@ -706,13 +1053,16 @@ struct ContentView: View {
     /// out which of the marks on a page are English and which are algebra is a
     /// guess, and a wrong guess answers a question nobody asked.
     func askQuestion() async {
-        guard let written = canvas.writtenLines().last else {
+        guard let written = canvas.workingLines(pageWidth: pageWidth).last else {
             tutorWrites(["write your question at the bottom, then tap ask."])
             return
         }
 
         stopListening()
-        tutorLines.removeAll { $0.kind == .remark }
+        // Keep earlier tutor notes on the page — only append new answers.
+
+        thinking = true
+        defer { thinking = false }
 
         do {
             let words = try await readWords([RowData(strokes: written.strokes)])
@@ -731,12 +1081,13 @@ struct ContentView: View {
 
             let reply = try await fetchAnswer(to: question)
 
-            tutorWrites([reply, "want me to work one through? write yes"])
+            tutorWrites(
+                [reply, "want me to work one through?"],
+                nearLine: written.lineNumber,
+                beside: written.bounds
+            )
 
-            offer = .example(question)
-            offerLine = tutorLines.last?.line
-            answered = nil
-            answerSeen = nil
+            markOffer(.example(question))
         } catch {
             tutorWrites(["sorry, i couldn't answer that one."])
         }
@@ -798,91 +1149,94 @@ struct ContentView: View {
         isChecking = true
         defer { isChecking = false }
 
-        // A safe moment to catch the paper up with how far down they have got.
         growPage()
+
+        // An open question is answered first — yes or no, written or tapped.
+        if offer != nil {
+            await readReply()
+            if answered != nil { return }
+        }
 
         errorLine = nil
         solvedLine = nil
-
-        // An offer from the last check is about work that has since changed,
-        // so stop waiting on it, and rub out what was said about that work.
-        // Without this the same verdict is written again on every check and
-        // the page fills with copies of it. A lesson is kept: it was asked
-        // for, and it is what they are working from.
-        stopListening()
-        tutorLines.removeAll { $0.kind == .remark }
-
+        errorInk = nil
+        solvedInk = nil
         hideFeedback()
 
-        // Bundle the page into lines, then send just the coordinates
-        let lines = canvas.writtenLines()
+        let lines = canvas.workingLines(pageWidth: pageWidth)
         let rows = lines.map { RowData(strokes: $0.strokes) }
 
         do {
             let result = try await checkHandwriting(rows, problemIndex: problem?.index)
 
-            // The page was cleared while we waited, so this verdict is about
-            // writing that is no longer on it.
             if Task.isCancelled { return }
 
             let skipped = result.ignored ?? []
-
-            // Kept so a question asked afterwards carries the working with it.
             lastRead = result.recognized ?? []
 
-            // Anything the recognizer could not make sense of stays in a note.
-            // It is a remark about the reading, not something a tutor would
-            // write on a student's page.
             if !skipped.isEmpty {
                 show(Feedback(text: "Skipped some writing.", tone: .plain, skipped: skipped))
             }
 
+            // Tutor notes stay on the page across rechecks. New feedback is
+            // appended beside the work it refers to.
+
+            // Anything starred on the page was a question, and the server has
+            // already answered it. Said first, because it is the thing they
+            // stopped to ask, and the verdict on the algebra can wait a line.
+            for asked in result.questions ?? [] {
+                tutorWrites(
+                    [asked.answer.lowercased()],
+                    kind: .lesson,
+                    nearLine: lines.last?.lineNumber,
+                    beside: lines.last?.bounds
+                )
+            }
+
             if result.ok {
-                if lines.isEmpty {
-                    tutorWrites(["write your first step underneath."])
+                stopListening()
+
+                let readAnyAlgebra = !(result.recognized ?? []).isEmpty
+                let near = lines.last?.lineNumber
+                let ink = lines.last?.bounds
+
+                if !readAnyAlgebra {
+                    if let nudge = result.message {
+                        tutorWrites([nudge.lowercased()], nearLine: near, beside: ink)
+                    }
                 } else if result.solved == true {
-                    // Tick the last line that was written
                     solvedLine = lines.last?.lineNumber
+                    solvedInk = ink
                     solvedProblems.insert(currentIndex)
-                    tutorWrites(["solved. \(result.answer ?? "")".lowercased()])
+                    tutorWrites(["solved. \(result.answer ?? "")".lowercased()], nearLine: near, beside: ink)
                 } else {
-                    // A quadratic can be half done — one root written, the
-                    // other still to find. The server knows how many answers
-                    // the question has, so when it has something more useful
-                    // to say than "keep going", it says it.
-                    tutorWrites([(result.message ?? "correct so far. keep going.").lowercased()])
+                    tutorWrites([(result.message ?? "correct so far. keep going.").lowercased()], nearLine: near, beside: ink)
                 }
             } else {
-                // The server counts written lines from 1; turn that back into
-                // the ruled line it was actually written on.
                 if let step = result.errorStep, step - 1 < lines.count {
                     errorLine = lines[step - 1].lineNumber
+                    errorInk = lines[step - 1].bounds
                 }
 
+                let near = errorLine ?? lines.last?.lineNumber
                 var says = [(result.message ?? "something doesn't follow.").lowercased()]
 
-                // A step is marked wrong until it is taken off the page, so
-                // writing a better one underneath does not settle it. Left
-                // unsaid, the same complaint comes back after work that looks
-                // like it should have answered it, and the cross is by then
-                // far enough up the page to be out of sight.
-                if let marked = errorLine, marked < (lines.last?.lineNumber ?? 0) {
-                    says.append("that line has a cross by it. rub it out and carry on from there.")
+                if result.help?.wrongLine != nil, result.help?.wrongLine == lastWrongLine {
+                    says.append("it's the line with the cross beside it, further up.")
                 }
 
-                // The offer goes on the end of the same batch, so it writes
-                // itself once the explanation above it has finished rather
-                // than racing it down the page.
+                lastWrongLine = result.help?.wrongLine
+
                 if result.help != nil {
-                    says.append("want a hand? write yes")
+                    says.append("want a hand?")
                 }
 
-                tutorWrites(says)
+                tutorWrites(says, nearLine: near, beside: errorInk)
 
                 if let help = result.help {
-                    offer = .help(help)
-                    offerLine = tutorLines.last?.line
-                    answered = nil
+                    markOffer(.help(help))
+                } else {
+                    stopListening()
                 }
             }
         } catch {

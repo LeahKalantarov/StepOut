@@ -10,9 +10,9 @@ import Foundation
 struct TutorLine: Identifiable {
     /// Whether the line should survive the next check.
     enum Kind {
-        /// A verdict or an offer of help. Only true of the work as it stood
-        /// when it was written, so it is rubbed out and written afresh each
-        /// time the work is checked.
+        /// A verdict or an offer of help. Stays on the page across rechecks so
+        /// earlier notes can still be read — new feedback is appended beside
+        /// the work it refers to, not written over the old.
         case remark
 
         /// Something taught. It was asked for, and it stays until the page is
@@ -38,7 +38,25 @@ struct TutorLine: Identifiable {
     /// Which ruled line it rests on, counting from the top of the page.
     let line: Int
 
+    /// How far in from the left the pen touches down. Tutor columns sit beside
+    /// the student's work rather than underneath it.
+    let originX: CGFloat
+
     /// How long to wait before starting, so lines follow one another instead
     /// of appearing together.
     let delay: Double
+
+    /// Whether the pen has finished with this line. Set once its batch is
+    /// done, so redrawing it elsewhere shows it whole rather than writing it
+    /// out all over again.
+    var written = false
+}
+
+/// One sitting of the tutor's writing — a verdict, an offer, or a lesson.
+struct TutorBatch: Identifiable {
+    let id: UUID
+    let kind: TutorLine.Kind
+    let lines: [TutorLine]
+
+    var firstLine: Int { lines.first?.line ?? 0 }
 }

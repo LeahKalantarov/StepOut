@@ -28,11 +28,10 @@ struct NotebookPage: UIViewRepresentable {
     let onScroll: (CGFloat) -> Void
 
     func makeUIView(context: Context) -> NotebookCanvas {
-        canvas.drawingPolicy = .anyInput
-
-        // One finger writes, so scrolling takes two. Without this the canvas
-        // would read a scroll as a stroke and draw a line across the page.
-        canvas.panGestureRecognizer.minimumNumberOfTouches = 2
+        // Only the pencil writes. A hand resting on the page is how people
+        // write, and it leaves marks if fingers draw too. It also hands the
+        // whole of touch back to scrolling, so one finger moves the page.
+        canvas.drawingPolicy = .pencilOnly
 
         canvas.backgroundColor = .clear
         canvas.isOpaque = false

@@ -18,11 +18,13 @@ import time
 
 from checker.parser import parse_equation
 from checker.problems import PROBLEMS, get_problem, solve_for_answer
+from checker.handwriting import as_written
 from checker.step_checker import (
     DOES_NOT_FOLLOW,
     EXTRA,
     NONE_LEFT,
     check_equations,
+    check_page,
     check_steps,
 )
 
@@ -289,6 +291,106 @@ def test_answer_key_lists_both_roots():
     check("answer key: both roots listed", answer == "x = -3, x = 3", answer)
 
 
+def check_page_with_problem(problem_text, steps):
+    """
+    Check a whole page, which may hold more than one go at the question.
+    """
+    equations = [parse_equation(step) for step in steps]
+    return check_page(equations, steps, parse_equation(problem_text))
+
+
+def test_second_attempt_is_the_one_that_counts():
+    # Got it wrong, left the mess on the page, copied the question out again
+    # and did it properly the second time. Read as one chain this is a page
+    # with a mistake near the top; read as two attempts it is a solved page.
+    result = check_page_with_problem(
+        "2x + 5 = 13",
+        ["2x + 5 = 13", "2x = 9", "2x + 5 = 13", "2x = 8", "x = 4"],
+    )
+
+    check("second attempt: page is solved", result["ok"] and result["solved"], result)
+    check("second attempt: both runs seen", result["attempts"] == 2, result)
+    check("second attempt: the later one is read", result["attempt_read"] == 2, result)
+
+
+def test_solving_it_then_writing_on_does_not_undo_it():
+    result = check_page_with_problem(
+        "2x + 5 = 13",
+        ["2x + 5 = 13", "2x = 8", "x = 4", "2x + 5 = 13", "2x = 3"],
+    )
+
+    check("wandering on: still solved", result["ok"] and result["solved"], result)
+
+
+def test_two_bad_attempts_report_the_later_one():
+    result = check_page_with_problem(
+        "2x + 5 = 13",
+        ["2x + 5 = 13", "2x = 9", "2x + 5 = 13", "2x = 7"],
+    )
+
+    check("two bad runs: still wrong", not result["ok"], result)
+    # Counting the whole page, not the attempt: line 4 is "2x = 7".
+    check("two bad runs: fault is in the later one", result["error_step"] == 4, result)
+
+
+def test_one_attempt_behaves_as_before():
+    # A page with a single run at the question must come back untouched by any
+    # of this, including the keys it does not set.
+    result = check_page_with_problem("2x + 5 = 13", ["2x + 5 = 13", "2x = 8", "x = 4"])
+
+    check("one run: solved", result["ok"] and result["solved"], result)
+    check("one run: not reported as attempts", "attempts" not in result, result)
+
+
+def test_a_repeated_step_is_not_a_fresh_attempt():
+    # 2x = 8 has the same solutions as the question and is the same equation
+    # by the older rule, so a looser test for "they started again" would split
+    # here and read the page as three attempts of one line each.
+    result = check_page_with_problem("2x + 5 = 13", ["2x + 5 = 13", "2x = 8", "x = 4"])
+
+    check("mid-solution step is not a restart", "attempts" not in result, result)
+
+
+def test_recognized_latex_is_made_readable():
+    # Everything past recognition is read by a person, so none of it should
+    # ever carry a backslash. This exact line was shown to a student.
+    written = as_written(r"\left( x - 3 \right) \left( x - 3 \right) = 0")
+
+    check("readable: brackets close up", written == "(x - 3)(x - 3) = 0", written)
+
+    cases = {
+        r"2x + \frac{5}{2} = 13": "2x + 5/2 = 13",
+        r"\frac{x+1}{2} = 4": "(x+1)/2 = 4",
+        r"x ^{2} - 9 = 0": "x^2 - 9 = 0",
+        r"2 \cdot x = 8": "2 * x = 8",
+        r"x = 4 \sim": "x = 4",
+    }
+
+    for latex, expected in cases.items():
+        got = as_written(latex)
+        check(f"readable: {latex}", got == expected, got)
+
+
+def test_a_power_keeps_its_braces_when_it_needs_them():
+    # The stroke font raises a braced group, so x^{n+1} must survive intact.
+    written = as_written(r"x ^{n+1} = 4")
+
+    check("readable: braced power kept", written == "x^{n+1} = 4", written)
+
+
+def test_losing_a_root_is_not_described_as_fewer_answers():
+    # "has fewer answers" reads as being about the answers the student wrote
+    # down, and a student who has written none finds the sentence meaningless.
+    result = check_with_problem("x^2 - 9 = 0", ["(x - 3)(x - 3) = 0"])
+
+    check("lost root: called wrong", not result["ok"], result)
+    check(
+        "lost root: phrased about solutions",
+        result.get("message") == "(x - 3)(x - 3) = 0 doesn't keep every solution of the question.",
+        result.get("message"),
+    )
+
+
 if __name__ == "__main__":
     test_linear_correct()
     test_linear_answer_written_backwards()
@@ -316,6 +418,14 @@ if __name__ == "__main__":
     test_something_solve_struggles_with()
     test_every_problem_has_an_answer()
     test_answer_key_lists_both_roots()
+    test_second_attempt_is_the_one_that_counts()
+    test_solving_it_then_writing_on_does_not_undo_it()
+    test_two_bad_attempts_report_the_later_one()
+    test_one_attempt_behaves_as_before()
+    test_a_repeated_step_is_not_a_fresh_attempt()
+    test_recognized_latex_is_made_readable()
+    test_a_power_keeps_its_braces_when_it_needs_them()
+    test_losing_a_root_is_not_described_as_fewer_answers()
 
     print()
     print(f"{passed} passed, {failed} failed")

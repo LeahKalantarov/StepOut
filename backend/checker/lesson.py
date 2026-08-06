@@ -15,11 +15,13 @@ same checker that marks their work, and anything that fails is thrown away.
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
 
+from checker.handwriting import as_written
 from checker.parser import parse_equation, plain_symbols
 from checker.step_checker import check_equations
 
@@ -36,7 +38,17 @@ Give back four things:
 concept  - what this is called, in a few words. For example "dividing both
            sides" or "difference of two squares".
 rule     - the rule itself, in one short line they can copy down and look back
-           at. Use maths notation, not a sentence.
+           at.
+
+           Write it the way you would say it out loud to someone sitting next
+           to you. Plain words are better than symbols here. Never introduce
+           letters that are not already in their work: a student who has only
+           ever seen x does not know what u and v are, and
+
+               uv = 0 -> u = 0 or v = 0
+
+           is unreadable to them even though it is true. Say "if two things
+           multiply to make 0, one of them must be 0" instead. No arrows.
 question - a DIFFERENT equation of the same kind, which needs the same move.
            Never their equation, and never one with their numbers. Keep it
            simple and clean, with whole-number answers.
@@ -50,6 +62,11 @@ How to write the maths in `rule` and `steps`:
 - Multiplication can be implied: write 2x, not 2*x.
 - Divide with a slash: 42 / 6. Never the printed signs for times or divide.
 - Every line in `steps` must be a full equation with exactly one equals sign.
+- If your question has more than one answer, `steps` must reach EVERY one of
+  them, each on a line of its own. A quadratic has two, so finish with two
+  lines like "x = 4" and "x = -4". Never write them together on one line, and
+  never stop after the first: an example that finds one root of two teaches
+  the very mistake most students are here for.
 """.strip()
 
 
@@ -101,35 +118,50 @@ def work_through(asked, problem=None):
     return write_lesson(context)
 
 
-def write_lesson(context):
+def write_lesson(context, tries=2):
     """
     Ask for a lesson about `context`, and throw it away unless it checks out.
+
+    Asks twice before giving up. Verification is strict on purpose, and the
+    thing it most often catches is a good lesson written in a shape it cannot
+    read — both roots on one line, or an example that stopped a step early. A
+    model asked the same thing again usually lands inside the rules, and the
+    student gets a lesson instead of an apology. If it fails twice, that is a
+    real answer and we say nothing rather than write something unchecked.
     """
     api_key = os.getenv("OPENAI_API_KEY")
 
     if not api_key:
         return None
 
-    try:
-        reply = OpenAI(api_key=api_key).responses.parse(
-            model=MODEL,
-            instructions=INSTRUCTIONS,
-            input=context,
-            text_format=Lesson,
-        )
-        lesson = reply.output_parsed
-    except Exception:
-        return None
+    for attempt in range(tries):
+        try:
+            reply = OpenAI(api_key=api_key).responses.parse(
+                model=MODEL,
+                instructions=INSTRUCTIONS,
+                input=context,
+                text_format=Lesson,
+            )
+            lesson = reply.output_parsed
+        except Exception as error:
+            print(f"lesson: asking failed ({type(error).__name__})")
+            continue
 
-    if lesson is None or not steps_hold_up(lesson.steps):
-        return None
+        if lesson is None:
+            continue
 
-    return {
-        "concept": lesson.concept,
-        "rule": for_writing(lesson.rule),
-        "question": for_writing(lesson.question),
-        "steps": [for_writing(step) for step in lesson.steps],
-    }
+        if not steps_hold_up(lesson.steps):
+            print(f"lesson: try {attempt + 1} did not check out: {lesson.steps}")
+            continue
+
+        return {
+            "concept": lesson.concept,
+            "rule": for_writing(lesson.rule),
+            "question": for_writing(lesson.question),
+            "steps": [for_writing(step) for step in lesson.steps],
+        }
+
+    return None
 
 
 def steps_hold_up(steps):
@@ -139,19 +171,58 @@ def steps_hold_up(steps):
     This is the whole safety net. If the example wouldn't pass on the student's
     page, it has no business being written onto it.
     """
-    if len(steps) < 2:
+    written = separate_answers(steps)
+
+    if len(written) < 2:
         return False
 
     try:
-        equations = [parse_equation(step) for step in steps]
+        equations = [parse_equation(step) for step in written]
     except Exception:
         # A step we cannot even read is a step we cannot vouch for.
         return False
 
-    result = check_equations(equations, steps)
+    result = check_equations(equations, written)
 
     # A worked example that stops before the answer teaches half a method.
     return result["ok"] and result.get("solved", False)
+
+
+# The ways two answers get written on one line. "x = 4 or x = -4" is how a
+# person writes it and how the model keeps wanting to.
+BOTH_ANSWERS = re.compile(r"\s+or\s+|;|,")
+PLUS_MINUS = re.compile(r"±|\+/-")
+
+
+def separate_answers(steps):
+    """
+    Give every answer a line of its own, so the checker can count them.
+
+    Only for checking. What gets written on the page is the model's own
+    wording, because "x = 4 or x = -4" is how it is said out loud and reads
+    better in the tutor's hand than two bare lines.
+
+    Without this a lesson that ends the natural way is thrown out for being
+    unreadable, and the student is told the tutor cannot explain something it
+    had in fact explained perfectly well.
+    """
+    written = []
+
+    for step in steps:
+        for piece in BOTH_ANSWERS.split(step):
+            piece = piece.strip()
+
+            if not piece:
+                continue
+
+            if PLUS_MINUS.search(piece):
+                # x = ±4 is two answers wearing one coat.
+                written.append(PLUS_MINUS.sub("+", piece))
+                written.append(PLUS_MINUS.sub("-", piece))
+            else:
+                written.append(piece)
+
+    return written
 
 
 def for_writing(text):
@@ -161,5 +232,10 @@ def for_writing(text):
     We ask the model for `x**2` because that is what the checker can read, but
     nobody writes two stars on a page. Printed symbols like ÷ are swapped out
     too: the stroke font has no glyph for them, so they would come out as gaps.
+
+    as_written is the last line of defence. The model is told not to use LaTeX
+    and mostly obeys, but it is a model, and a single \\frac reaching the page
+    would be drawn as the literal characters — the font has nothing else it
+    could do with a backslash.
     """
-    return plain_symbols(text).replace("**", "^")
+    return as_written(plain_symbols(text).replace("**", "^"))

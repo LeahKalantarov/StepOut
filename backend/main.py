@@ -4,11 +4,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from checker.answers import answer
-from checker.handwriting import read_handwriting, read_words, split_on_arrows
+from checker.handwriting import (
+    as_written,
+    read_handwriting,
+    read_words,
+    split_on_arrows,
+)
 from checker.lesson import teach, work_through
 from checker.parser import parse_equation, parse_latex_equation
 from checker.problems import get_problem, list_problems
-from checker.step_checker import check_equations, check_steps
+from checker.step_checker import check_page, check_steps
 from checker.tutor import explain
 
 app = FastAPI()
@@ -63,6 +68,61 @@ class AskRequest(BaseModel):
     # question like "why doesn't that work" means nothing without them.
     problem: str | None = None
     work: list[str] | None = None
+
+
+# A row has to have at least this many strokes before we spend a recognition
+# call asking whether it was words. Annotations like "÷2" are shorter than any
+# question anyone has ever written.
+LEAST_STROKES_FOR_WORDS = 4
+
+# How many unreadable rows to look at. Every one costs a call to the reader and
+# possibly a second to the tutor, and a question is nearly always the last
+# thing written, so we look at the end of the page and stop.
+MOST_ROWS_TO_REREAD = 2
+
+
+def marked_as_a_question(words):
+    """
+    Whether a line of writing was meant for the tutor rather than for the page.
+
+    Two markings, both of them things people already do. A star in front is the
+    one to teach, because it is quick and it survives being read back. A
+    question mark on the end costs nothing to accept and is what everybody
+    reaches for first.
+    """
+    words = words.strip()
+
+    return words.startswith("*") or words.endswith("?")
+
+
+def questions_on_the_page(unread, problem, work):
+    """
+    Read the rows that were not algebra, and answer any that were questions.
+
+    Anything else on those rows is left alone. Working out is full of lines
+    that are not equations — a crossed-out term, "-5" written under both
+    sides — and answering those would be worse than ignoring them.
+    """
+    replies = []
+
+    for strokes in unread[-MOST_ROWS_TO_REREAD:]:
+        try:
+            words = read_words(strokes)
+        except Exception:
+            continue
+
+        print(f"not algebra, read as words: {words!r}")
+
+        if not marked_as_a_question(words):
+            continue
+
+        asked = words.strip().lstrip("*").strip()
+        reply = answer(asked, problem, work)
+
+        if reply:
+            replies.append({"asked": asked, "answer": reply})
+
+    return replies
 
 
 @app.get("/")
@@ -126,8 +186,10 @@ def check_handwriting(request: HandwritingRequest):
     try:
         equations = []
         recognized = []
+        written = []
         source_rows = []
         ignored = []
+        unread = []
 
         for row_number, row in enumerate(request.rows):
             if len(row.strokes) == 0:
@@ -136,6 +198,8 @@ def check_handwriting(request: HandwritingRequest):
             strokes = [{"x": s.x, "y": s.y} for s in row.strokes]
             latex = read_handwriting(strokes)
             print(f"row {row_number + 1}: {len(row.strokes)} strokes -> {latex!r}")
+
+            found_here = 0
 
             # One line can hold more than one step when the student chains them
             # with arrows, so ask for the steps rather than assuming there is
@@ -152,22 +216,25 @@ def check_handwriting(request: HandwritingRequest):
                 try:
                     equation = parse_latex_equation(step)
                 except Exception:
-                    ignored.append(step)
+                    ignored.append(as_written(step))
                     continue
 
                 equations.append(equation)
                 recognized.append(step)
+
+                # The reading copy. SymPy is given the LaTeX above; everything
+                # from here on is for a person, whether that is the student
+                # reading a message or the model writing one.
+                written.append(as_written(step))
                 source_rows.append(row_number)
+                found_here += 1
 
-        if len(equations) == 0:
-            return {
-                "ok": True,
-                "recognized": [],
-                "ignored": ignored,
-                "message": "No equations found yet — write a full line like 2x = 8.",
-            }
+            # No algebra on this row at all. It might not have been algebra.
+            if found_here == 0 and len(row.strokes) >= LEAST_STROKES_FOR_WORDS:
+                unread.append(strokes)
 
-        # When the student was given a problem, make sure they copied it right
+        # Which problem they are on, needed both for checking their copy of it
+        # and for answering anything they asked about it.
         problem = None
         problem_equation = None
         if request.problem_index is not None:
@@ -175,9 +242,29 @@ def check_handwriting(request: HandwritingRequest):
             if problem is not None:
                 problem_equation = parse_equation(problem["equation"])
 
-        result = check_equations(equations, recognized, problem_equation)
-        result["recognized"] = recognized
+        asked = questions_on_the_page(
+            unread,
+            problem["equation"] if problem else None,
+            written,
+        )
+
+        if len(equations) == 0:
+            return {
+                "ok": True,
+                "recognized": [],
+                "ignored": ignored,
+                "questions": asked,
+                # A page holding nothing but a question has been answered, so
+                # do not send them away to write algebra first.
+                "message": None
+                if asked
+                else "No equations found yet — write a full line like 2x = 8.",
+            }
+
+        result = check_page(equations, written, problem_equation)
+        result["recognized"] = written
         result["ignored"] = ignored
+        result["questions"] = asked
 
         if not result["ok"]:
             step = result["error_step"]
@@ -185,10 +272,10 @@ def check_handwriting(request: HandwritingRequest):
             # The very first line has no line above it, so what it had to follow
             # from was the question itself.
             question = problem["equation"] if problem else None
-            came_from = recognized[step - 2] if step >= 2 else question
+            came_from = written[step - 2] if step >= 2 else question
 
             explanation = explain(
-                question, came_from, recognized[step - 1], result.get("reason")
+                question, came_from, written[step - 1], result.get("reason")
             )
             if explanation:
                 result["message"] = explanation
@@ -199,7 +286,7 @@ def check_handwriting(request: HandwritingRequest):
             result["help"] = {
                 "question": question,
                 "previous_line": came_from,
-                "wrong_line": recognized[step - 1],
+                "wrong_line": written[step - 1],
                 "reason": result.get("reason"),
             }
 
@@ -207,8 +294,10 @@ def check_handwriting(request: HandwritingRequest):
             result["error_step"] = source_rows[step - 1] + 1
 
         verdict = "ok" if result["ok"] else f"WRONG ({result.get('reason')})"
+        attempts = result.get("attempts", 1)
         print(
             f"problem={request.problem_index} {len(equations)} equation(s)"
+            f" in {attempts} attempt(s), read #{result.get('attempt_read', 1)}"
             f" -> {verdict}, help={'yes' if 'help' in result else 'no'}"
         )
 

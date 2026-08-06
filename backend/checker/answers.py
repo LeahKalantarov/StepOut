@@ -15,6 +15,7 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from checker.handwriting import as_written
 from checker.parser import plain_symbols
 
 load_dotenv()
@@ -69,6 +70,8 @@ def answer(asked, problem=None, work=None):
     except Exception:
         return None
 
-    written = plain_symbols(reply.output_text.strip())
+    # Goes onto the page in a stroke font, which cannot draw a backslash, so
+    # any LaTeX the model reached for is taken back out here.
+    written = as_written(plain_symbols(reply.output_text.strip()))
 
     return written or None

@@ -20,8 +20,35 @@ struct HandwrittenLine: View {
     /// instead of both being written at once.
     var delay: Double = 0
 
+    /// Already on the page, so show it whole and do not write it again.
+    ///
+    /// Moving a line from the page into the tutor's panel gives it a new
+    /// identity as far as SwiftUI is concerned, and it would otherwise write
+    /// itself out from scratch — turning a change of layout into a wait.
+    var alreadyWritten = false
+
     /// How much of the line has been written so far, from 0 to 1.
-    @State private var written: CGFloat = 0
+    @State private var written: CGFloat
+
+    init(
+        text: String,
+        origin: CGPoint,
+        height: CGFloat = 30,
+        color: Color = .blue.opacity(0.75),
+        delay: Double = 0,
+        alreadyWritten: Bool = false
+    ) {
+        self.text = text
+        self.origin = origin
+        self.height = height
+        self.color = color
+        self.delay = delay
+        self.alreadyWritten = alreadyWritten
+
+        // Set here rather than in the task, so a line that is already written
+        // is never blank for even a frame.
+        _written = State(initialValue: alreadyWritten ? 1 : 0)
+    }
 
     var body: some View {
         StrokeFont.path(for: text, from: origin, height: height)
@@ -33,6 +60,8 @@ struct HandwrittenLine: View {
             // Rewrite from the start whenever the text changes, so moving to
             // the next question animates instead of appearing all at once.
             .task(id: text) {
+                guard !alreadyWritten else { return }
+
                 written = 0
                 try? await Task.sleep(for: .seconds(delay))
 
@@ -50,6 +79,6 @@ struct HandwrittenLine: View {
     /// the text, because the `^` and braces in `x^{10}` are never drawn and
     /// would otherwise buy the line time it does not need.
     static func writingTime(for text: String) -> Double {
-        max(0.6, Double(StrokeFont.writtenCharacterCount(in: text)) * 0.11)
+        max(0.25, Double(StrokeFont.writtenCharacterCount(in: text)) * 0.045)
     }
 }

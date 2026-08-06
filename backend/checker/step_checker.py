@@ -357,9 +357,14 @@ def failure_message(verdict, label, came_from):
     "doesn't follow", a student stares at working that is perfectly sound as
     far as it goes, and the real fault — a root that quietly went missing —
     is nowhere in the sentence.
+
+    "Answers" was the wrong word for it. A student who has not written an
+    answer down yet reads "has fewer answers" as being about their working
+    rather than about what the equation is true for, and the sentence lands as
+    nonsense. "Solution" is what is actually meant.
     """
     if verdict == LOST:
-        return f"{label} has fewer answers than {came_from}"
+        return f"{label} doesn't keep every solution of {came_from}"
 
     return f"{label} doesn't follow from {came_from}"
 
@@ -650,3 +655,100 @@ def check_steps(steps):
 
     equations = [parse_equation(step) for step in steps]
     return check_equations(equations, steps)
+
+
+def restates(equation, problem_equation):
+    """
+    Whether this line is the question itself, written out again.
+
+    Deliberately stricter than same_equation(). Almost every line of a correct
+    solution has the same solutions as the question, and most of them are the
+    same equation by the "one side is a multiple of the other" rule too —
+    2x + 5 = 13 and 2x = 8 both come down to 2x - 8. Either of those tests
+    would call every step a fresh start.
+
+    Writing the question out again means writing the same two sides, so that
+    is what we look for.
+    """
+    if problem_equation is None:
+        return False
+
+    def compare():
+        return (
+            simplify(equation.lhs - problem_equation.lhs) == 0
+            and simplify(equation.rhs - problem_equation.rhs) == 0
+        )
+
+    return with_time_limit(compare) is True
+
+
+def attempt_starts(equations, problem_equation):
+    """
+    Where each run at the question begins.
+
+    A student who gets stuck does not rub out what they have done. They copy
+    the question down again lower on the page, or in the space beside it, and
+    start over. Read as one long chain, the good second attempt is buried
+    under a mistake in the first, and the page is reported as wrong however
+    well the student finished.
+    """
+    starts = [0]
+
+    for i in range(1, len(equations)):
+        if restates(equations[i], problem_equation):
+            starts.append(i)
+
+    return starts
+
+
+def how_far_it_got(result):
+    """
+    Rank one attempt, so the page can be judged on the best of them.
+    """
+    if not result["ok"]:
+        return 0
+
+    if result.get("solved"):
+        return 2
+
+    return 1
+
+
+def check_page(equations, labels, problem_equation=None):
+    """
+    Check everything on the page, allowing for more than one go at it.
+
+    Splits the lines into attempts, checks each on its own, and reports the
+    one that got furthest — later attempts winning ties, since that is the one
+    the student is looking at.
+
+    Reporting the best rather than the last is what makes a page of crossings
+    out safe to leave alone. A student who solved it, then started idly
+    writing again underneath, has still solved it; a student whose first go
+    was a mess and whose second was right is told they were right.
+    """
+    starts = attempt_starts(equations, problem_equation)
+
+    if len(starts) < 2:
+        return check_equations(equations, labels, problem_equation)
+
+    attempts = []
+
+    for n, start in enumerate(starts):
+        end = starts[n + 1] if n + 1 < len(starts) else len(equations)
+        result = check_equations(equations[start:end], labels[start:end], problem_equation)
+
+        # error_step counts within the attempt. The caller knows only about
+        # the page, so put it back into the page's numbering.
+        if not result["ok"]:
+            result["error_step"] += start
+
+        attempts.append(result)
+
+    best = max(range(len(attempts)), key=lambda i: (how_far_it_got(attempts[i]), i))
+
+    chosen = dict(attempts[best])
+    chosen["attempts"] = len(attempts)
+    chosen["attempt_read"] = best + 1
+
+    return chosen

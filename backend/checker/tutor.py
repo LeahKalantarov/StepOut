@@ -14,6 +14,7 @@ doing the algebra.
 import os
 
 from dotenv import load_dotenv
+from checker.handwriting import as_written
 from openai import OpenAI
 
 load_dotenv()
@@ -74,6 +75,9 @@ def explain(question, previous_line, wrong_line, reason=None):
             input=student_work,
             max_output_tokens=120,
         )
-        return reply.output_text.strip() or None
+        # This sentence is written onto the page in a stroke font, which has no
+        # way to draw a backslash. The model is told to keep away from LaTeX,
+        # but being told is not the same as being stopped.
+        return as_written(reply.output_text.strip()) or None
     except Exception:
         return None

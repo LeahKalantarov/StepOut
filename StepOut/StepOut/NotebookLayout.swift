@@ -24,10 +24,13 @@ enum NotebookLayout {
     ///
     /// Line 0 is the top line. StrokeReader numbers lines the same way, so a
     /// line written here and a line read back there mean the same thing.
-    static func penStart(onLine lineNumber: Int) -> CGPoint {
+    static func penStart(onLine lineNumber: Int, x: CGFloat? = nil) -> CGPoint {
         CGPoint(
-            x: marginWidth + 16,
+            x: x ?? marginWidth + 16,
             y: CGFloat(lineNumber + 1) * lineHeight - 12
         )
     }
+
+    /// Gap between the student's column and the tutor's.
+    static let columnGap: CGFloat = 24
 }

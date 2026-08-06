@@ -30,6 +30,15 @@ struct CheckResult: Codable {
     // wrong. Held onto in case the student asks for help, and handed straight
     // back so nothing has to work out what went wrong a second time.
     let help: HelpContext?
+
+    // Anything written on the page and marked as a question, already answered.
+    let questions: [AnsweredQuestion]?
+}
+
+/// A question the student wrote on their page, and what the tutor said back.
+struct AnsweredQuestion: Codable {
+    let asked: String
+    let answer: String
 }
 
 /// One mistake, described well enough to teach the idea behind it.

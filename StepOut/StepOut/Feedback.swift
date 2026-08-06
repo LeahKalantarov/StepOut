@@ -25,44 +25,43 @@ struct FeedbackNote: View {
     let feedback: Feedback
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Label {
-                Text(feedback.text)
-                    .fontWeight(.medium)
-            } icon: {
-                Image(systemName: symbol)
-                    .foregroundStyle(colour)
-            }
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 17))
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(colour.gradient, in: Circle())
 
-            if !feedback.skipped.isEmpty {
-                Text("Skipped \(feedback.skipped.joined(separator: ", "))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(feedback.text)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
+
+                if !feedback.skipped.isEmpty {
+                    Text("Skipped \(feedback.skipped.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(.vertical, 12)
-        .padding(.horizontal, 18)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(colour.opacity(0.35), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+        .padding(.horizontal, 16)
+        .brutalBorder(radius: 18)
     }
 
     private var symbol: String {
         switch feedback.tone {
-        case .good: "checkmark.circle.fill"
-        case .bad: "exclamationmark.circle.fill"
-        case .plain: "info.circle.fill"
+        case .good: "checkmark"
+        case .bad: "exclamationmark"
+        case .plain: "info"
         }
     }
 
     private var colour: Color {
         switch feedback.tone {
-        case .good: .green
-        case .bad: .red
-        case .plain: .secondary
+        case .good: Color(red: 0.13, green: 0.52, blue: 0.32)
+        case .bad: Theme.pink
+        case .plain: Theme.sky
         }
     }
 }

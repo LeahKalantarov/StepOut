@@ -1,82 +1,99 @@
 import SwiftUI
 
-/// A small floating palette: what to write with, and how to take it back.
+/// The floating pen tray — pencil, eraser, widths, colours, paper.
 struct PenPalette: View {
     @Bindable var pen: Pen
-
-    /// Undo and redo belong to the canvas, so it does the work.
-    let undo: () -> Void
-    let redo: () -> Void
+    @Bindable var paper: Paper
 
     var body: some View {
-        HStack(spacing: 6) {
-            tool(.pencil, isOn: !pen.isErasing) { pen.isErasing = false }
-            tool(.eraser, isOn: pen.isErasing) { pen.isErasing = true }
+        HStack(spacing: 12) {
+            toolPencil
+            toolEraser
 
             divider
 
-            ForEach(Pen.widths, id: \.self) { width in
-                widthDot(width)
+            HStack(spacing: 6) {
+                ForEach(Pen.widths, id: \.self, content: widthDot)
             }
 
             divider
 
-            ForEach(Pen.colours, id: \.self) { colour in
-                colourDot(colour)
+            HStack(spacing: 8) {
+                ForEach(Pen.paletteColours, id: \.self, content: colourDot)
             }
 
             divider
 
-            button(.undo, action: undo)
-            button(.redo, action: redo)
+            paperMenu
         }
-        .padding(6)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.black.opacity(0.06)))
-        .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Theme.paper, in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(Theme.ink, lineWidth: 2.5)
+        )
     }
 
     // MARK: - Pieces
 
-    private enum Symbol: String {
-        case pencil = "pencil.tip"
-        case eraser = "eraser"
-        case undo = "arrow.uturn.backward"
-        case redo = "arrow.uturn.forward"
-    }
-
-    private func tool(_ symbol: Symbol, isOn: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol.rawValue)
-                .font(.system(size: 15))
-                .foregroundStyle(isOn ? Color.white : .primary)
-                .frame(width: 30, height: 30)
-                .background(isOn ? Color.accentColor : .clear, in: Circle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func button(_ symbol: Symbol, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol.rawValue)
-                .font(.system(size: 14))
-                .foregroundStyle(.primary)
-                .frame(width: 28, height: 30)
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Thicknesses are drawn at the size they write, so the choice is obvious
-    /// without a label.
-    private func widthDot(_ width: CGFloat) -> some View {
+    private var toolPencil: some View {
         Button {
+            pen.isErasing = false
+        } label: {
+            Text("✏️")
+                .font(.system(size: 22))
+                .frame(width: 36, height: 36)
+                .background(
+                    !pen.isErasing ? Theme.pink.opacity(0.25) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Theme.ink, lineWidth: !pen.isErasing ? 2 : 0)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var toolEraser: some View {
+        Button {
+            pen.isErasing = true
+        } label: {
+            Image(systemName: "eraser.fill")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Theme.ink)
+                .frame(width: 36, height: 36)
+                .background(Theme.paper, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Theme.ink, lineWidth: pen.isErasing ? 2 : 1.5)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func widthDot(_ width: CGFloat) -> some View {
+        let chosen = pen.width == width && !pen.isErasing
+        let size = width + 6
+
+        return Button {
             pen.width = width
             pen.isErasing = false
         } label: {
             Circle()
-                .fill(pen.width == width ? Color.primary : .secondary)
-                .frame(width: width + 4, height: width + 4)
-                .frame(width: 24, height: 30)
+                .fill(Theme.ink)
+                .frame(width: size, height: size)
+                .frame(width: 30, height: 30)
+                .background(
+                    chosen ? Color.clear : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Theme.ink, lineWidth: chosen ? 2 : 0)
+                        .frame(width: 28, height: 28)
+                )
         }
         .buttonStyle(.plain)
     }
@@ -88,28 +105,69 @@ struct PenPalette: View {
         } label: {
             Circle()
                 .fill(colour)
-                .frame(width: 18, height: 18)
+                .frame(width: 22, height: 22)
+                .overlay(Circle().strokeBorder(Theme.ink.opacity(0.2), lineWidth: 1))
                 .overlay(
                     Circle()
-                        .strokeBorder(.primary, lineWidth: 2)
+                        .strokeBorder(Theme.ink, lineWidth: 2)
                         .opacity(pen.colour == colour && !pen.isErasing ? 1 : 0)
                         .padding(-3)
                 )
-                .frame(width: 26, height: 30)
         }
         .buttonStyle(.plain)
     }
 
+    private var paperMenu: some View {
+        Menu {
+            Picker("Ruling", selection: $paper.ruling) {
+                ForEach(Paper.Ruling.allCases) { ruling in
+                    Label(ruling.name, systemImage: ruling.symbol).tag(ruling)
+                }
+            }
+
+            Picker("Paper", selection: $paper.shade) {
+                ForEach(Paper.Shade.allCases) { shade in
+                    Text(shade.name).tag(shade)
+                }
+            }
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Theme.paper)
+                    .frame(width: 28, height: 34)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Theme.ink, lineWidth: 1.5)
+                    )
+
+                VStack(spacing: 3) {
+                    ForEach(0..<4, id: \.self) { _ in
+                        Rectangle()
+                            .fill(Theme.sky.opacity(0.7))
+                            .frame(width: 18, height: 1)
+                    }
+                }
+
+                Rectangle()
+                    .fill(Theme.pink.opacity(0.8))
+                    .frame(width: 1, height: 28)
+                    .offset(x: -8)
+            }
+            .frame(width: 36, height: 36)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+    }
+
     private var divider: some View {
         Rectangle()
-            .fill(.quaternary)
-            .frame(width: 1, height: 20)
-            .padding(.horizontal, 2)
+            .fill(Theme.ink.opacity(0.12))
+            .frame(width: 1.5, height: 28)
     }
 }
 
 #Preview {
-    PenPalette(pen: Pen(), undo: {}, redo: {})
+    PenPalette(pen: Pen(), paper: Paper())
         .padding(40)
-        .background(Color(red: 0.99, green: 0.98, blue: 0.94))
+        .background(Theme.paper)
 }

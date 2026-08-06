@@ -190,3 +190,94 @@ def read_words(strokes):
     for those moments we ask MyScript for English instead.
     """
     return ask_myscript(strokes, "Text", "text/plain").strip().lower()
+
+
+# LaTeX commands that stand for something a student would simply write. Longer
+# spellings come first: replacing \ge before \geq would leave a stray q behind.
+WRITTEN_SYMBOLS = {
+    r"\geq": ">=",
+    r"\leq": "<=",
+    r"\neq": "!=",
+    r"\ge": ">=",
+    r"\le": "<=",
+    r"\ne": "!=",
+    r"\cdot": "*",
+    r"\times": "*",
+    r"\div": "/",
+    r"\pm": "+/-",
+}
+
+
+def bracket(part):
+    """
+    Wrap a piece of a fraction in brackets, unless it is a single symbol that
+    cannot be misread without them.
+    """
+    part = part.strip()
+    return part if len(part) == 1 else f"({part})"
+
+
+def as_written(latex_text):
+    """
+    Turn MyScript's LaTeX back into maths the way it looked on the page.
+
+    Everything downstream of recognition is for people. The message under a
+    cross is read by the student, the same text is handed to a language model
+    that has been told never to write LaTeX, and it goes back onto the page in
+    a stroke font that has no idea what a backslash is. LaTeX reaching any of
+    those is a bug, and it did: a mis-factored line came back as
+
+        \\left( x - 3 \\right) \\left( x - 3 \\right) = 0
+
+    and that is what the student was shown.
+
+    The LaTeX itself is still what we parse with — SymPy wants it, and it
+    carries structure that plain text loses. This is only the reading copy.
+    """
+    # \left and \right are sizing hints wrapped around brackets that are
+    # already in the text.
+    text = re.sub(r"\\left\s*|\\right\s*", "", latex_text)
+
+    # Innermost fractions first, so a nested one unwraps a layer at a time.
+    while True:
+        unwrapped = re.sub(
+            r"\\frac\{([^{}]*)\}\{([^{}]*)\}",
+            lambda match: f"{bracket(match.group(1))}/{bracket(match.group(2))}",
+            text,
+        )
+
+        if unwrapped == text:
+            break
+
+        text = unwrapped
+
+    text = re.sub(r"\\sqrt\{([^{}]*)\}", r"sqrt(\1)", text)
+
+    for command, symbol in WRITTEN_SYMBOLS.items():
+        text = text.replace(command, symbol)
+
+    # A subscript here is nearly always a word that was read as algebra —
+    # "yes" comes back as y_{e s} — so close it up rather than lose the word.
+    text = re.sub(r"\s*_\{([^{}]*)\}", lambda match: match.group(1).replace(" ", ""), text)
+
+    # Powers keep their braces. The stroke font raises whatever follows a ^,
+    # braces and all, so x^{n+1} writes correctly; a single digit reads better
+    # without them.
+    text = re.sub(r"\s*\^\s*\{(\w)\}", r"^\1", text)
+    text = re.sub(r"\s*\^\s*", "^", text)
+
+    # Whatever still carries a backslash is recognizer noise. A stray pen mark
+    # comes back as \sim or \backslash, and neither means anything to anyone.
+    text = re.sub(r"\\[a-zA-Z]+\s*", "", text)
+    text = text.replace("\\", "")
+
+    text = tidy_spacing(re.sub(r"\s+", " ", text).strip())
+
+    # Brackets sit against what they hold, and against each other. Dropping
+    # \left and \right leaves gaps where the commands used to be, and
+    # "( x - 3 ) ( x - 3 )" is not how anybody writes it down.
+    text = re.sub(r"\(\s+", "(", text)
+    text = re.sub(r"\s+\)", ")", text)
+    text = re.sub(r"\)\s+\(", ")(", text)
+
+    return text.strip()
