@@ -14,9 +14,7 @@ struct ContentView: View {
     @State private var isTutorThinking = false
 
     @State private var lastResult: CheckResult?
-    @State private var tutorReply: String?
-    @State private var tutorPrompt: String?
-    @State private var showPrompt = false
+    @State private var tutorNotes: [TutorNote] = []
 
     @State private var notes = ""
     @State private var attachedPhotos: [String] = []
@@ -42,8 +40,8 @@ struct ContentView: View {
 
                 statusSection
 
-                if let tutorReply {
-                    tutorSection(tutorReply)
+                if !tutorNotes.isEmpty {
+                    TutorNotesSection(notes: $tutorNotes)
                 }
 
                 HStack(spacing: 16) {
@@ -195,36 +193,6 @@ struct ContentView: View {
         }
     }
 
-    func tutorSection(_ reply: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Tutor")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                if tutorPrompt != nil {
-                    Button(showPrompt ? "Hide prompt" : "Show AI prompt") {
-                        showPrompt.toggle()
-                    }
-                    .font(.caption)
-                }
-            }
-
-            Text(reply)
-                .font(.body)
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-
-            if showPrompt, let tutorPrompt {
-                Text(tutorPrompt)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .padding(10)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-            }
-        }
-    }
-
     var resultColor: Color {
         if wrongRow != nil { return .red }
         if isSolved { return .green }
@@ -319,7 +287,7 @@ struct ContentView: View {
 
     func readPushback() async {
         guard let lastResult else {
-            tutorReply = "Check your work first, then tell me what feels wrong."
+            appendTutorNote("Check your work first, then tell me what feels wrong.")
             return
         }
 
@@ -341,13 +309,18 @@ struct ContentView: View {
                 notes: notes
             )
 
-            tutorReply = response.reply
-            tutorPrompt = response.prompt
+            appendTutorNote(response.reply, prompt: response.prompt)
             resultText = response.isPushback == true
                 ? "Got it — I'm looking at what you wrote."
                 : resultText
         } catch {
-            tutorReply = "I couldn't reach the tutor right now."
+            appendTutorNote("I couldn't reach the tutor right now.")
+        }
+    }
+
+    func appendTutorNote(_ text: String, prompt: String? = nil) {
+        withAnimation(.snappy) {
+            tutorNotes.append(TutorNote(text: text, prompt: prompt))
         }
     }
 
@@ -364,8 +337,7 @@ struct ContentView: View {
         isSolved = false
         recognized = []
         lastResult = nil
-        tutorReply = nil
-        tutorPrompt = nil
+        tutorNotes = []
         attachedPhotos = []
         sessionId = UUID().uuidString
         resultText = "Write your steps — I'll check as you go."
