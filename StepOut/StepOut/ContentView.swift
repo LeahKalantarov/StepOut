@@ -116,8 +116,14 @@ struct ContentView: View {
     // The batch a long press opened the keep-or-remove menu for.
     @State private var batchMenu: TutorBatch?
 
-    // Which way a photograph of work on real paper is being brought in.
+    // Which way a picture is being brought in, and what for.
     @State private var photoChoice: PhotoChoice?
+    @State private var photoPurpose: PhotoPurpose = .markWork
+
+    // Whether the problems on offer were read off a photographed worksheet
+    // rather than sent by the server, so the drawer can say where they
+    // came from and offer a way back to the built-in ones.
+    @State private var problemsFromAssignment = false
 
     // How wide the notebook is, so the tutor can use the full line.
     @State private var pageWidth: CGFloat = 700
@@ -216,17 +222,33 @@ struct ContentView: View {
             }
             .disabled(isChecking)
 
+            Button("Upload an assignment") {
+                photoPurpose = .readAssignment
+                photoChoice = .library
+            }
+            .disabled(isChecking)
+
+            Button("Upload work you did on paper") {
+                photoPurpose = .markWork
+                photoChoice = .library
+            }
+            .disabled(isChecking)
+
             if PhotoChoice.camera.isAvailable {
-                Button("Photograph work on paper") {
+                Button("Take a photo of your work") {
+                    photoPurpose = .markWork
                     photoChoice = .camera
                 }
                 .disabled(isChecking)
             }
 
-            Button("Check a photo") {
-                photoChoice = .library
+            if problemsFromAssignment {
+                Button("Back to the built-in questions") {
+                    problemsFromAssignment = false
+                    checkTask = Task { await loadProblems() }
+                }
+                .disabled(isChecking)
             }
-            .disabled(isChecking)
 
             Button(tutorApart ? "Tutor on the page" : "Tutor in its own panel") {
                 tutorApart.toggle()
@@ -250,8 +272,13 @@ struct ContentView: View {
             PhotoSource(source: choice.source) { image in
                 photoChoice = nil
 
-                if let image {
+                guard let image else { return }
+
+                switch photoPurpose {
+                case .markWork:
                     checkTask = Task { await checkPhotograph(image) }
+                case .readAssignment:
+                    checkTask = Task { await takeOnAssignment(image) }
                 }
             }
             .ignoresSafeArea()
@@ -742,6 +769,8 @@ struct ContentView: View {
     func loadProblems() async {
         do {
             problems = try await fetchProblems()
+            problemsFromAssignment = false
+            currentIndex = 0
         } catch {
             show(Feedback(text: "Could not reach the server.", tone: .bad))
         }
@@ -756,7 +785,17 @@ struct ContentView: View {
         // A check already on its way would come back and mark writing that is
         // about to be wiped, so call it off first.
         checkTask?.cancel()
+        hideFeedback()
+        emptyPage()
+    }
 
+    /// Wipe the page without calling off the check or clearing the note.
+    ///
+    /// Kept apart from `clearPage` for the one caller that is itself running
+    /// inside the check: cancelling the task you are in the middle of is a
+    /// strange way to finish a job, and the note it is about to show would be
+    /// hidden before anybody read it.
+    func emptyPage() {
         canvas.erasePage()
         errorLine = nil
         solvedLine = nil
@@ -768,7 +807,6 @@ struct ContentView: View {
         tutorLines = []
         lastWrongLine = nil
         collapsedBatches = []
-        hideFeedback()
 
         canvas.setContentOffset(.zero, animated: false)
         growPage()
@@ -1322,7 +1360,13 @@ struct ContentView: View {
         let rows = lines.map { RowData(strokes: $0.strokes) }
 
         do {
-            let result = try await checkHandwriting(rows, problemIndex: problem?.index)
+            // The wording travels as well as the index, because a problem read
+            // off a worksheet has no place in the server's list to be found in.
+            let result = try await checkHandwriting(
+                rows,
+                problemIndex: problem?.index,
+                problemEquation: problem?.equation
+            )
 
             if Task.isCancelled { return }
 
@@ -1397,6 +1441,58 @@ struct ContentView: View {
         } catch {
             // Clearing the page cancels the check, which is not a failure the
             // student needs telling about.
+            if !Task.isCancelled {
+                show(Feedback(text: "Could not reach the server.", tone: .bad))
+            }
+        }
+    }
+
+    /// Take on the questions from a photographed worksheet.
+    ///
+    /// The sheet replaces the built-in questions rather than joining them. An
+    /// uploaded assignment is what the student sat down to do, and burying it
+    /// at the end of a list of practice problems would make finding it a chore
+    /// every time. The More menu offers the way back.
+    func takeOnAssignment(_ image: UIImage) async {
+        isChecking = true
+        defer { isChecking = false }
+
+        guard let jpeg = image.jpegForReading() else {
+            show(Feedback(text: "Could not read that picture.", tone: .bad))
+            return
+        }
+
+        do {
+            let found = try await fetchProblemsFromPhoto(jpeg)
+
+            if Task.isCancelled { return }
+
+            guard !found.isEmpty else {
+                show(
+                    Feedback(
+                        text: "I couldn't find any questions in that picture. Try again with the sheet flat and the whole page in shot.",
+                        tone: .bad
+                    )
+                )
+                return
+            }
+
+            problems = found
+            problemsFromAssignment = true
+            currentIndex = 0
+            solvedProblems = []
+            emptyPage()
+
+            show(
+                Feedback(
+                    text: found.count == 1
+                        ? "Got 1 question from your assignment."
+                        : "Got \(found.count) questions from your assignment.",
+                    tone: .good,
+                    skipped: found.map(\.equation)
+                )
+            )
+        } catch {
             if !Task.isCancelled {
                 show(Feedback(text: "Could not reach the server.", tone: .bad))
             }

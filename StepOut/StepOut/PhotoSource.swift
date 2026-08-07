@@ -1,7 +1,19 @@
 import SwiftUI
 import UIKit
 
-/// Where a photograph of working came from.
+/// What a picture is being brought in for.
+///
+/// The same picker serves both, and they are easy to mix up from the code that
+/// receives the image, so the intent is decided when the picker is opened.
+enum PhotoPurpose {
+    /// A picture of work already done, to be marked.
+    case markWork
+
+    /// A picture of the sheet the work was set from, to be solved.
+    case readAssignment
+}
+
+/// Where a picture came from.
 enum PhotoChoice: Identifiable {
     case camera
     case library

@@ -35,6 +35,11 @@ struct HandwritingRequest: Codable {
     // Which problem the student is on, so the server can catch a first line
     // that doesn't match the question.
     let problemIndex: Int?
+
+    // The question itself. Problems read off a photographed worksheet are not
+    // in the server's list, so there is no index that would find them, and
+    // sending the wording is the only way to be marked against it.
+    let problemEquation: String?
 }
 
 /// A photograph of work done on real paper.
@@ -94,10 +99,18 @@ func checkSteps(_ steps: [String]) async throws -> CheckResult {
 }
 
 /// Send handwriting to be read and checked.
-func checkHandwriting(_ rows: [RowData], problemIndex: Int?) async throws -> CheckResult {
+func checkHandwriting(
+    _ rows: [RowData],
+    problemIndex: Int?,
+    problemEquation: String?
+) async throws -> CheckResult {
     try await post(
         path: "/check-handwriting",
-        body: HandwritingRequest(rows: rows, problemIndex: problemIndex)
+        body: HandwritingRequest(
+            rows: rows,
+            problemIndex: problemIndex,
+            problemEquation: problemEquation
+        )
     )
 }
 
@@ -139,7 +152,8 @@ func checkPhoto(_ jpeg: Data, problemIndex: Int?) async throws -> CheckResult {
 func readWords(_ rows: [RowData]) async throws -> [String] {
     let reply: WordsReply = try await post(path: "/read-words", body: HandwritingRequest(
         rows: rows,
-        problemIndex: nil
+        problemIndex: nil,
+        problemEquation: nil
     ))
 
     return reply.words
@@ -159,6 +173,34 @@ func fetchAnswer(to question: Question) async throws -> String {
 /// Ask for an example worked through, in answer to a question.
 func fetchWorkedExample(for question: Question) async throws -> Lesson {
     try await post(path: "/work-through", body: question)
+}
+
+/// Read the questions off a photographed worksheet.
+///
+/// Comes back in the same shape as the built-in problems, so everything that
+/// already lists and sets a problem carries on working without knowing where
+/// this one came from.
+func fetchProblemsFromPhoto(_ jpeg: Data) async throws -> [Problem] {
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+
+    let body = try encoder.encode(
+        PhotoRequest(
+            imageBase64: jpeg.base64EncodedString(),
+            mediaType: "image/jpeg",
+            problemIndex: nil
+        )
+    )
+
+    var request = URLRequest(url: URL(string: serverAddress + "/problems-from-photo")!)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = body
+    request.timeoutInterval = 60
+
+    let (data, _) = try await URLSession.shared.data(for: request)
+
+    return try JSONDecoder().decode(ProblemList.self, from: data).problems
 }
 
 /// Ask the server for every problem, so the sidebar can list them.

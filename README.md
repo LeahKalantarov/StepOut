@@ -33,6 +33,19 @@ The iPad has to reach your Mac over the same Wi-Fi. It looks for the Mac by
 name, which you can check with `scutil --get LocalHostName`, and set in
 `StepOut/StepOut/CheckService.swift`.
 
+## Bringing in work from paper
+
+Two directions, both under **More** in the app:
+
+- **Upload an assignment** reads the questions off a photographed worksheet and
+  sets them as the problems to solve. Questions only — sheets usually arrive
+  half done, and reading the attempt would set the student their own working.
+- **Upload work you did on paper** reads working already done and marks it,
+  exactly as it marks writing on the page.
+
+Both need `OPENAI_API_KEY`, and a model that can see images. If the default
+cannot, set `PHOTO_MODEL` in `.env`; the server log says which of those it was.
+
 ## Where things live
 
 | Path | What it does |
@@ -40,7 +53,7 @@ name, which you can check with `scutil --get LocalHostName`, and set in
 | `backend/main.py` | The endpoints the iPad calls |
 | `backend/checker/step_checker.py` | Whether each step follows from the last |
 | `backend/checker/handwriting.py` | Pen strokes to LaTeX, via MyScript |
-| `backend/checker/photo.py` | A photograph of working to lines of maths |
+| `backend/checker/photo.py` | A picture of working, or of a worksheet, to lines of maths |
 | `backend/checker/review.py` | Lines of maths to a marked verdict |
 | `backend/checker/tutor.py` | Puts a verdict into a sentence |
 | `backend/checker/lesson.py` | Worked examples when help is asked for |
