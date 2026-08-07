@@ -50,6 +50,53 @@ def solve_for_answer(equation):
     return ", ".join(f"{variable} = {answer}" for answer in answers)
 
 
+def problems_from_lines(lines):
+    """
+    Turn questions read off a worksheet into problems the app can set.
+
+    Anything that is not a solvable equation in one unknown is dropped. A
+    photographed sheet brings in headings, page numbers and half-read scribbles
+    along with the questions, and a list with junk in it is worse than a
+    shorter list: every entry here becomes something the student can tap.
+
+    The prompt names the unknown the question actually uses, because a sheet in
+    y should not open saying "Solve for x".
+    """
+    problems = []
+
+    for line in lines:
+        try:
+            equation = parse_equation(line)
+        except Exception:
+            continue
+
+        unknowns = sorted(equation.free_symbols, key=str)
+
+        # One unknown only. Two means it is a formula to rearrange rather than
+        # an equation to solve, and the checker has nothing useful to say.
+        if len(unknowns) != 1:
+            continue
+
+        try:
+            answers = solve(equation, unknowns[0])
+        except Exception:
+            continue
+
+        # Nothing to solve towards, so nothing to mark against.
+        if not answers:
+            continue
+
+        problems.append(
+            {
+                "index": len(problems),
+                "prompt": f"Solve for {unknowns[0]}",
+                "equation": line.strip(),
+            }
+        )
+
+    return problems
+
+
 def list_problems():
     """
     Every problem, for the sidebar. No answers: the iPad never needs them,

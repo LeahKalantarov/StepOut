@@ -28,7 +28,7 @@ load_dotenv()
 # so this is deliberately not tied to the model the tutor's voice uses.
 MODEL = os.getenv("PHOTO_MODEL", "gpt-5.6-luna")
 
-INSTRUCTIONS = """
+WORKING_INSTRUCTIONS = """
 You transcribe photographs of handwritten maths. You are a pair of eyes, not a
 tutor and not a solver.
 
@@ -46,6 +46,27 @@ Rules, in order of importance:
 - If a character is genuinely unreadable, leave that whole line out rather than
   guessing at it.
 - If there is no handwritten maths in the photograph at all, output nothing.
+""".strip()
+
+ASSIGNMENT_INSTRUCTIONS = """
+You transcribe photographs of maths worksheets and assignments. You are a pair
+of eyes, not a tutor and not a solver.
+
+Write out the questions the student has been asked to solve, one per line, in
+the order they appear.
+
+Rules, in order of importance:
+- Only the questions. If someone has started working on them, ignore the
+  working and write out the question it started from.
+- Never solve anything. "3x = 21" stays "3x = 21". Never write the answer.
+- Just the equation, with the wording around it dropped. "1. Solve for x:
+  3x = 21" becomes "3x = 21".
+- Plain maths as it is written on paper. No LaTeX, no backslashes, no dollar
+  signs, no markdown.
+- Skip anything that is not an equation to solve: headings, names, dates,
+  instructions, page numbers.
+- If a question is unreadable, leave it out rather than guessing at it.
+- If there are no questions in the photograph at all, output nothing.
 """.strip()
 
 # A line of transcription we can use has a variable in it or an equals sign.
@@ -108,15 +129,15 @@ def looks_like_an_image(image_base64):
     return True
 
 
-def read_photo(image_base64, media_type="image/jpeg"):
+def read_lines(image_base64, instructions, asking, media_type="image/jpeg"):
     """
-    Read a photograph of working, and return the lines written on it.
+    Show the photograph to the model, and tidy whatever it says back.
 
     Returns an empty list when there is no API key, when the photograph holds
-    no maths, or when the request fails. The caller treats all three the same
-    way — as a page it could not read — because from the student's side they
-    are the same thing, and a photograph nobody can read is not an error worth
-    a stack trace.
+    nothing to read, or when the request fails. The caller treats all three the
+    same way — as a picture it could not read — because from the student's side
+    they are the same thing, and a photograph nobody can read is not an error
+    worth a stack trace.
     """
     api_key = os.getenv("OPENAI_API_KEY")
 
@@ -131,15 +152,12 @@ def read_photo(image_base64, media_type="image/jpeg"):
     try:
         reply = OpenAI(api_key=api_key).responses.create(
             model=MODEL,
-            instructions=INSTRUCTIONS,
+            instructions=instructions,
             input=[
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "input_text",
-                            "text": "Transcribe the handwritten maths in this photograph.",
-                        },
+                        {"type": "input_text", "text": asking},
                         {
                             "type": "input_image",
                             "image_url": f"data:{media_type};base64,{image_base64}",
@@ -157,3 +175,31 @@ def read_photo(image_base64, media_type="image/jpeg"):
         return []
 
     return tidy_lines(reply.output_text)
+
+
+def read_photo(image_base64, media_type="image/jpeg"):
+    """
+    Read a photograph of someone's working, line by line.
+    """
+    return read_lines(
+        image_base64,
+        WORKING_INSTRUCTIONS,
+        "Transcribe the handwritten maths in this photograph.",
+        media_type,
+    )
+
+
+def read_assignment(image_base64, media_type="image/jpeg"):
+    """
+    Read a photograph of a worksheet, and return the questions on it.
+
+    The questions only, never the answers. A sheet somebody has already started
+    is the normal case, and the point is to be given the same questions they
+    were given, not their attempt at them.
+    """
+    return read_lines(
+        image_base64,
+        ASSIGNMENT_INSTRUCTIONS,
+        "List the equations this worksheet asks the student to solve.",
+        media_type,
+    )

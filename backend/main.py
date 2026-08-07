@@ -12,8 +12,8 @@ from checker.handwriting import (
 )
 from checker.lesson import teach, work_through
 from checker.parser import parse_equation, parse_latex_equation
-from checker.photo import read_photo
-from checker.problems import get_problem, list_problems
+from checker.photo import read_assignment, read_photo
+from checker.problems import get_problem, list_problems, problems_from_lines
 from checker.review import review_lines
 from checker.step_checker import check_page, check_steps
 from checker.tutor import explain
@@ -250,7 +250,18 @@ def check_handwriting(request: HandwritingRequest):
         # and for answering anything they asked about it.
         problem = None
         problem_equation = None
-        if request.problem_index is not None:
+
+        if request.problem_equation:
+            # Came off a worksheet, so it is the question itself rather than a
+            # place in a list. Unparseable means the reading of the sheet was
+            # wrong, and marking against a question nobody set would be worse
+            # than marking the steps on their own.
+            try:
+                problem_equation = parse_equation(request.problem_equation)
+                problem = {"equation": request.problem_equation}
+            except Exception:
+                problem_equation = None
+        elif request.problem_index is not None:
             problem = get_problem(request.problem_index)
             if problem is not None:
                 problem_equation = parse_equation(problem["equation"])
@@ -450,4 +461,39 @@ def check_photograph(request: PhotoRequest):
         return JSONResponse(
             status_code=400,
             content={"ok": False, "message": str(error)},
+        )
+
+
+@app.post("/problems-from-photo")
+def problems_from_photo(request: PhotoRequest):
+    """
+    Read the questions off a photographed worksheet, so they can be worked on.
+
+    This is the other half of photographing paper. /check-photo takes a picture
+    of work already done and marks it; this takes a picture of the sheet it was
+    set from, and hands back questions the student can then solve on the page,
+    with everything the app already does — marking, hints, worked examples.
+
+    Answers are never read, only questions. Sheets usually arrive half done,
+    and reading the attempt would set the student their own working as the
+    thing to solve.
+    """
+    try:
+        lines = read_assignment(request.image_base64, request.media_type)
+        problems = problems_from_lines(lines)
+
+        print(f"worksheet read as {len(lines)} line(s), {len(problems)} usable")
+
+        if not problems:
+            return {
+                "problems": [],
+                "message": "I couldn't find any questions in that picture. "
+                "Try again with the sheet flat and the whole page in shot.",
+            }
+
+        return {"problems": problems}
+    except Exception as error:
+        return JSONResponse(
+            status_code=400,
+            content={"problems": [], "message": str(error)},
         )

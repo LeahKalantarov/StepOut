@@ -15,6 +15,7 @@ failed, so it can be trusted without reading the output.
 """
 
 from checker.photo import looks_like_an_image, read_photo, tidy_lines
+from checker.problems import problems_from_lines
 from checker.review import review_lines
 
 passed = 0
@@ -204,6 +205,73 @@ def test_a_problem_index_nobody_has_does_not_crash():
     check("an unknown problem falls back to checking the steps alone", result["ok"], result)
 
 
+# MARK: questions read off a worksheet
+
+
+def test_questions_become_problems():
+    problems = problems_from_lines(["3x = 21", "2x + 5 = 13"])
+
+    check("readable questions become problems", len(problems) == 2, problems)
+    check(
+        "keeping the question as it was written",
+        [p["equation"] for p in problems] == ["3x = 21", "2x + 5 = 13"],
+        problems,
+    )
+    check(
+        "and numbered from the top of the sheet",
+        [p["index"] for p in problems] == [0, 1],
+        problems,
+    )
+
+
+def test_the_prompt_names_the_right_unknown():
+    problems = problems_from_lines(["3y = 21"])
+
+    check(
+        "a sheet in y does not ask you to solve for x",
+        problems and problems[0]["prompt"] == "Solve for y",
+        problems,
+    )
+
+
+def test_junk_from_the_page_is_dropped():
+    # A photographed worksheet brings in the heading and the page number along
+    # with the questions. Every entry that survives becomes something tappable.
+    problems = problems_from_lines(
+        ["3x = 21", "name = date", "x + y = 10", "2x = 8"]
+    )
+    equations = [p["equation"] for p in problems]
+
+    check("questions in one unknown are kept", "3x = 21" in equations, equations)
+    check("two unknowns are dropped", "x + y = 10" not in equations, equations)
+    check("and the numbering closes up", [p["index"] for p in problems] == list(range(len(problems))), problems)
+
+
+def test_an_unreadable_sheet_gives_nothing():
+    check("nothing readable means no problems", problems_from_lines([]) == [])
+    check(
+        "and neither does a page of headings",
+        problems_from_lines(["homework 4", "show all working"]) == [],
+        problems_from_lines(["homework 4", "show all working"]),
+    )
+
+
+def test_a_question_read_off_a_sheet_can_be_checked_against():
+    # The server has never heard of this problem, so the app sends the question
+    # itself. Working that starts from it should be marked against it.
+    from fastapi.testclient import TestClient
+
+    import main
+
+    client = TestClient(main.app)
+    body = client.post(
+        "/check",
+        json={"steps": ["7x = 49", "x = 7"]},
+    ).json()
+
+    check("work on a photographed question still checks out", body.get("ok"), body)
+
+
 # MARK: the endpoint the iPad calls
 
 
@@ -245,6 +313,42 @@ def test_endpoint_catches_a_wrong_step():
     check("and offers what a lesson needs", bool(body.get("help")), body)
 
 
+def worksheet_answer(reads_as):
+    """
+    Post a worksheet to the app, with the reading of it decided in advance.
+    """
+    from fastapi.testclient import TestClient
+
+    import main
+
+    original = main.read_assignment
+    main.read_assignment = lambda image, media_type="image/jpeg": reads_as
+
+    try:
+        response = TestClient(main.app).post(
+            "/problems-from-photo",
+            json={"image_base64": "aGVsbG8="},
+        )
+        return response.json()
+    finally:
+        main.read_assignment = original
+
+
+def test_endpoint_turns_a_worksheet_into_problems():
+    body = worksheet_answer(["3x = 21", "2x + 5 = 13"])
+    problems = body.get("problems") or []
+
+    check("a worksheet comes back as problems", len(problems) == 2, body)
+    check("in the shape the app already reads", "equation" in problems[0], problems)
+
+
+def test_endpoint_handles_a_worksheet_it_cannot_read():
+    body = worksheet_answer([])
+
+    check("no questions found is not an error", body.get("problems") == [], body)
+    check("and says how to retake it", bool(body.get("message")), body)
+
+
 def test_endpoint_handles_an_unreadable_photo():
     body = endpoint_answer([])
 
@@ -275,9 +379,17 @@ if __name__ == "__main__":
     test_working_on_a_different_problem_is_caught()
     test_a_problem_index_nobody_has_does_not_crash()
 
+    test_questions_become_problems()
+    test_the_prompt_names_the_right_unknown()
+    test_junk_from_the_page_is_dropped()
+    test_an_unreadable_sheet_gives_nothing()
+    test_a_question_read_off_a_sheet_can_be_checked_against()
+
     test_endpoint_passes_good_working()
     test_endpoint_catches_a_wrong_step()
     test_endpoint_handles_an_unreadable_photo()
+    test_endpoint_turns_a_worksheet_into_problems()
+    test_endpoint_handles_a_worksheet_it_cannot_read()
 
     print()
     print(f"{passed} passed, {failed} failed")
