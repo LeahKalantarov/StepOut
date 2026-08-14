@@ -83,6 +83,10 @@ struct ContentView: View {
     // coming back rather than a fresh mistake.
     @State private var lastWrongLine: String?
 
+    // The step they said no to being helped with. A refusal is about that
+    // mistake, not about that moment, and it stands until the line changes.
+    @State private var declinedHelpFor: String?
+
     // The line the question was written on. Kept for placing a reply on the
     // page, but strokes written after the offer are what we actually read.
     @State private var offerLine: Int?
@@ -1247,6 +1251,7 @@ struct ContentView: View {
         errorInk = nil
         solvedInk = nil
         lastWrongLine = nil
+        declinedHelpFor = nil
         lastSaid = []
         lastSaidAbout = -1
         writingSince = nil
@@ -1479,6 +1484,7 @@ struct ContentView: View {
         writingBatch = nil
         tutorLines = []
         lastWrongLine = nil
+        declinedHelpFor = nil
         lastSaid = []
         lastSaidAbout = -1
         collapsedBatches = []
@@ -2001,6 +2007,12 @@ struct ContentView: View {
             await write { try await fetchWorkedExample(for: question) }
 
         case (.no, _):
+            // Remembered against the line rather than the moment. Otherwise
+            // the next check finds the same wrong step still sitting there,
+            // reaches the same verdict, and asks again — and the student has
+            // to keep saying no to a question they already answered.
+            declinedHelpFor = lastWrongLine
+
             tutorWrites(
                 ["no problem. give it another go."],
                 nearLine: errorLine ?? tutorLines.last?.line,
@@ -2205,6 +2217,12 @@ struct ContentView: View {
             if result.ok {
                 stopListening()
 
+                // The page is right again, so whatever they turned help down
+                // on is behind them. If that same mistake reappears later it
+                // is a fresh one, and worth offering to help with afresh.
+                lastWrongLine = nil
+                declinedHelpFor = nil
+
                 let readAnyAlgebra = !(result.recognized ?? []).isEmpty
                 let near = lines.last?.lineNumber
                 let ink = lines.last?.bounds
@@ -2254,25 +2272,39 @@ struct ContentView: View {
                 // what makes it worth counting.
                 record.update { $0.slipped(result.help?.reason) }
 
-                let near = errorLine ?? lines.last?.lineNumber
-                var says = [(result.message ?? "something doesn't follow.").lowercased()]
+                let wrongLine = result.help?.wrongLine
+                let sameAsLastTime = wrongLine != nil && wrongLine == lastWrongLine
 
-                if result.help?.wrongLine != nil, result.help?.wrongLine == lastWrongLine {
-                    says.append("it's the line with the cross beside it, further up.")
-                }
+                // Turned down already, on this very line. The cross is still
+                // beside it and the note is still where it was, so there is
+                // nothing here the student has not already been told and then
+                // chosen to leave. Asking again every time the page is looked
+                // at is nagging rather than teaching — and saying "no" is
+                // itself writing, so it would fetch the whole verdict back on
+                // the very next check.
+                let alreadyRefused = wrongLine != nil && wrongLine == declinedHelpFor
 
-                lastWrongLine = result.help?.wrongLine
+                lastWrongLine = wrongLine
 
-                if result.help != nil {
-                    says.append("want a hand?")
-                }
+                if !alreadyRefused {
+                    let near = errorLine ?? lines.last?.lineNumber
+                    var says = [(result.message ?? "something doesn't follow.").lowercased()]
 
-                tutorWrites(says, nearLine: near, beside: errorInk)
+                    if sameAsLastTime {
+                        says.append("it's the line with the cross beside it, further up.")
+                    }
 
-                if let help = result.help {
-                    markOffer(.help(help))
-                } else {
-                    stopListening()
+                    if result.help != nil {
+                        says.append("want a hand?")
+                    }
+
+                    tutorWrites(says, nearLine: near, beside: errorInk)
+
+                    if let help = result.help {
+                        markOffer(.help(help))
+                    } else {
+                        stopListening()
+                    }
                 }
             }
 
