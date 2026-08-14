@@ -770,15 +770,23 @@ struct ContentView: View {
     func penFor(_ line: TutorLine, in batch: TutorBatch) -> (origin: CGPoint, height: CGFloat) {
         let (offset, scale) = placement(of: batch)
 
+        // The batch's own top-left corner, which every line in it is measured
+        // from and which a pinch scales about. Left to keep its own x, each
+        // line held its old place across the page while the letters changed
+        // size, so a block whose lines start at different points came apart
+        // as soon as it was resized. Measured from one corner it stays square.
+        let corner = batch.lines.map(\.originX).min() ?? line.originX
+        let across = (line.originX - corner) * scale
+
         // Lines are spaced by the ruling when the writing is its normal size.
         // Pinched bigger, they have to spread by the same amount or the
         // letters grow into the line beneath.
         let stepsDown = CGFloat(line.line - batch.firstLine)
-        let top = NotebookLayout.penStart(onLine: drawnLine(batch.firstLine), x: line.originX)
+        let top = NotebookLayout.penStart(onLine: drawnLine(batch.firstLine), x: corner)
 
         return (
             CGPoint(
-                x: top.x + offset.width,
+                x: top.x + across + offset.width,
                 y: top.y + stepsDown * NotebookLayout.lineHeight * scale + offset.height
             ),
             tutorHeight * scale
@@ -1669,7 +1677,11 @@ struct ContentView: View {
         }
 
         // Nothing free nearby — drop below it all and start at the margin.
-        let below = line + 5
+        // Below everything the tutor has written from here down, rather than
+        // a fixed five lines: a lesson runs longer than that, and landing in
+        // the middle of one is worse than starting further down empty paper.
+        let inTheWay = tutorLines.map(\.line).filter { $0 >= line }.max()
+        let below = max(line + 5, (inTheWay ?? line) + 1)
         let margin = NotebookLayout.penStart(onLine: below).x
 
         return Spot(line: below, originX: margin, width: pageWidth - rightMargin - margin)
@@ -1678,19 +1690,23 @@ struct ContentView: View {
     /// Where writing can start on one ruled line, and how much room it has.
     func room(onLine line: Int, pastInk edges: [Int: CGFloat]) -> Spot {
         let margin = NotebookLayout.penStart(onLine: line).x
+
+        // A line the tutor has already written on is not shared with a second
+        // remark. Carried on from where the last one stopped, two separate
+        // answers read as one long sentence, and picking either of them up
+        // afterwards drags a line that belongs to the other. A new answer
+        // starts on a new line, and the block stays a block.
+        if tutorLines.contains(where: { $0.line == line }) {
+            return Spot(line: line, originX: margin, width: 0)
+        }
+
         var edge = margin
         var taken = false
 
+        // Writing beside the student's own work is the point, though — that is
+        // how a remark lands next to the step it is about.
         if let ink = edges[line], ink > margin {
             edge = ink
-            taken = true
-        }
-
-        for written in tutorLines where written.line == line {
-            edge = max(
-                edge,
-                written.originX + StrokeFont.width(of: written.text, height: tutorHeight)
-            )
             taken = true
         }
 
