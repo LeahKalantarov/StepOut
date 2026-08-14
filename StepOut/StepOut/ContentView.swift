@@ -186,6 +186,10 @@ struct ContentView: View {
     // not write the same verdict out underneath itself.
     @State private var lastSaid: [String] = []
 
+    // How much was on the page when it said that. A verdict only repeats
+    // itself when nothing has been written or rubbed out since.
+    @State private var lastSaidAbout = -1
+
     // How wide the notebook is, so the tutor can use the full line.
     @State private var pageWidth: CGFloat = 700
 
@@ -1244,6 +1248,7 @@ struct ContentView: View {
         solvedInk = nil
         lastWrongLine = nil
         lastSaid = []
+        lastSaidAbout = -1
         writingSince = nil
         writingBatch = nil
 
@@ -1475,6 +1480,7 @@ struct ContentView: View {
         tutorLines = []
         lastWrongLine = nil
         lastSaid = []
+        lastSaidAbout = -1
         collapsedBatches = []
         batchOffsets = [:]
         batchScales = [:]
@@ -1500,11 +1506,21 @@ struct ContentView: View {
         nearLine: Int? = nil,
         beside bounds: CGRect? = nil
     ) {
-        // Already said, and still on the page. Rechecking work that has not
-        // changed reaches the same verdict, and writing it out a second time
+        // Already said about this very work. Rechecking a page nobody has
+        // touched reaches the same verdict, and writing it out again
         // underneath the first reads as a stutter rather than an answer.
-        guard sentences != lastSaid else { return }
+        //
+        // The work has to be part of that judgement. "Correct so far. keep
+        // going." is what a page of good work gets every single time, so
+        // comparing the words alone silenced the tutor from the second line
+        // onward — precisely when a student is doing well and the note should
+        // be following them down the page.
+        let written = canvas.drawing.strokes.count
+
+        guard sentences != lastSaid || written != lastSaidAbout else { return }
+
         lastSaid = sentences
+        lastSaidAbout = written
 
         // A verdict replaces the verdict before it. Checking a page four times
         // used to leave four remarks scattered around the same few lines, each
