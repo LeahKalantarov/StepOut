@@ -296,16 +296,15 @@ struct ContentView: View {
 
     var appHeader: some View {
         HStack(alignment: .center, spacing: 16) {
-            // Drawn rather than set: the blocks are part of the name, and
-            // the two have to keep their spacing. Height is fixed and the
-            // width follows, so the lockup is never squashed.
-            // 40pt is exactly the artwork's @3x height, so it lands on whole
-            // pixels and the block outlines stay sharp.
+            // Drawn rather than set: the blocks are part of the name, and the
+            // two have to keep their spacing. Height is fixed and the width
+            // follows, so the lockup is never squashed. The artwork is
+            // exported well above this size so the block outlines stay sharp.
             Image("Wordmark")
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
-                .frame(height: 40)
+                .frame(height: 52)
                 .accessibilityLabel("StepOut")
 
             Spacer(minLength: 12)
@@ -335,7 +334,7 @@ struct ContentView: View {
             .opacity(isChecking ? 0.6 : 1)
         }
         .padding(.horizontal, 22)
-        .padding(.vertical, 16)
+        .padding(.vertical, 14)
         .background(Theme.paper)
         .overlay(alignment: .bottom) {
             Rectangle()
