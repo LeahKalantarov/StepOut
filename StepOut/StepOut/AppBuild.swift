@@ -1,6 +1,6 @@
 import Foundation
 
-/// Changes when you pull a new build — confirm this shows in the header.
+/// Internal build tag — not shown in the UI.
 enum AppBuild {
-    static let marker = "stash-v7"
+    static let marker = "wordmark-v8"
 }
