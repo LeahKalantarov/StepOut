@@ -5,8 +5,21 @@ struct PenPalette: View {
     @Bindable var pen: Pen
     @Bindable var paper: Paper
 
+    /// Taking back the last stroke, and putting it back again.
+    ///
+    /// Here rather than buried in a menu because undo is what you reach for
+    /// straight after a mistake, and having to go looking for it in that moment
+    /// is how a page ends up scribbled out instead.
+    let onUndo: () -> Void
+    let onRedo: () -> Void
+
     var body: some View {
         HStack(spacing: 12) {
+            stepBack(icon: "arrow.uturn.backward", action: onUndo)
+            stepBack(icon: "arrow.uturn.forward", action: onRedo)
+
+            divider
+
             toolPencil
             toolEraser
 
@@ -36,6 +49,17 @@ struct PenPalette: View {
     }
 
     // MARK: - Pieces
+
+    private func stepBack(icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Theme.ink)
+                .frame(width: 34, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
 
     private var toolPencil: some View {
         Button {
@@ -167,7 +191,7 @@ struct PenPalette: View {
 }
 
 #Preview {
-    PenPalette(pen: Pen(), paper: Paper())
+    PenPalette(pen: Pen(), paper: Paper(), onUndo: {}, onRedo: {})
         .padding(40)
         .background(Theme.paper)
 }

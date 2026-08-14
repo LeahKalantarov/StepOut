@@ -15,5 +15,15 @@
 	     around the local network, which iOS asks permission for. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>StepOut checks your working against a helper running on your Mac, on this Wi-Fi network.</string>
+
+	<!-- Choosing a photo of a worksheet to read the questions off. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>StepOut reads the questions off a photo of your homework so you can work through them on the page.</string>
+
+	<!-- The hosted server, once there is one. Left empty, the app falls back
+	     to the Mac on this Wi-Fi, which is what you want while building.
+	     Paste the https address here and the app works anywhere. -->
+	<key>StepOutServer</key>
+	<string></string>
 </dict>
 </plist>

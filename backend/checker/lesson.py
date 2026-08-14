@@ -23,6 +23,8 @@ from pydantic import BaseModel
 
 from checker.handwriting import as_written
 from checker.parser import parse_equation, plain_symbols
+from checker.chart import recalled, with_chart
+from checker.voice import spoken
 from checker.step_checker import check_equations
 
 load_dotenv()
@@ -77,7 +79,7 @@ class Lesson(BaseModel):
     steps: list[str]
 
 
-def teach(student_question, previous_line, wrong_line, reason=None):
+def teach(student_question, previous_line, wrong_line, reason=None, style=None, history=None):
     """
     Work up a short lesson, or return None if we can't stand behind one.
 
@@ -94,13 +96,14 @@ def teach(student_question, previous_line, wrong_line, reason=None):
             # has to infer it from two equations and can teach the wrong idea
             # convincingly.
             f"What the checker found: this step {reason}" if reason else "",
+            recalled(history),
         ]
     ).strip()
 
-    return write_lesson(what_happened)
+    return write_lesson(what_happened, style, history)
 
 
-def work_through(asked, problem=None):
+def work_through(asked, problem=None, style=None, history=None):
     """
     Work an example through in answer to a question, rather than a mistake.
 
@@ -112,13 +115,14 @@ def work_through(asked, problem=None):
             f"The student asked: {asked}",
             f"They are working on: {problem}" if problem else "",
             "Show them an example of the kind of thing they are asking about.",
+            recalled(history),
         ]
     ).strip()
 
-    return write_lesson(context)
+    return write_lesson(context, style, history)
 
 
-def write_lesson(context, tries=2):
+def write_lesson(context, style=None, history=None, tries=2):
     """
     Ask for a lesson about `context`, and throw it away unless it checks out.
 
@@ -138,7 +142,7 @@ def write_lesson(context, tries=2):
         try:
             reply = OpenAI(api_key=api_key).responses.parse(
                 model=MODEL,
-                instructions=INSTRUCTIONS,
+                instructions=spoken(with_chart(INSTRUCTIONS, history), style),
                 input=context,
                 text_format=Lesson,
             )

@@ -7,9 +7,9 @@ import Foundation
 /// explanation arrives with the verdict, the offer of help a beat later, and a
 /// lesson only if it is asked for. Anything already on the page should stay
 /// still while the new line writes itself.
-struct TutorLine: Identifiable {
+struct TutorLine: Identifiable, Codable {
     /// Whether the line should survive the next check.
-    enum Kind {
+    enum Kind: String, Codable {
         /// A verdict or an offer of help. Stays on the page across rechecks so
         /// earlier notes can still be read — new feedback is appended beside
         /// the work it refers to, not written over the old.
@@ -21,7 +21,11 @@ struct TutorLine: Identifiable {
         case lesson
     }
 
-    let id = UUID()
+    // Mutable so that a line read back from disk keeps the identity it was
+    // saved with. A constant with a default is silently skipped when
+    // decoding, and every line would come back a stranger to the notebook it
+    // belongs to.
+    var id = UUID()
 
     /// Which sitting of writing this line belongs to.
     ///
@@ -59,4 +63,8 @@ struct TutorBatch: Identifiable {
     let lines: [TutorLine]
 
     var firstLine: Int { lines.first?.line ?? 0 }
+    var lastLine: Int { lines.map(\.line).max() ?? firstLine }
+
+    /// How many ruled lines it takes up when it is open.
+    var span: Int { lastLine - firstLine + 1 }
 }

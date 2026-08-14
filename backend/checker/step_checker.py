@@ -552,6 +552,12 @@ def describe_answers(equations, labels, solution_sets, expected):
         # "x = 3, x = -3" instead of only the root they happened to write first.
         result["answer"] = ", ".join(labels[i] for i in lines_that_added)
 
+        # Which lines those answers were on, counted from 1 the same way
+        # 'error_step' is. Without this the iPad has to guess where to put the
+        # tick, and its only guess is the last thing written — which is a note
+        # in the margin as often as it is the answer.
+        result["answer_steps"] = [i + 1 for i in lines_that_added]
+
     if result["partly_solved"]:
         if expected_count is None:
             result["message"] = "That is an answer, but it is not the only one."
@@ -742,6 +748,9 @@ def check_page(equations, labels, problem_equation=None):
         # the page, so put it back into the page's numbering.
         if not result["ok"]:
             result["error_step"] += start
+
+        if result.get("answer_steps"):
+            result["answer_steps"] = [step + start for step in result["answer_steps"]]
 
         attempts.append(result)
 

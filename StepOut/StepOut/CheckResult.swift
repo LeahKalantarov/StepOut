@@ -33,6 +33,11 @@ struct CheckResult: Codable {
 
     // Anything written on the page and marked as a question, already answered.
     let questions: [AnsweredQuestion]?
+
+    // Which rows the answers were written on, counted from 1. The tick and the
+    // ring go here. Without it the only guess available is the last row on the
+    // page, which is a note in the margin as often as it is the answer.
+    let answerSteps: [Int]?
 }
 
 /// A question the student wrote on their page, and what the tutor said back.

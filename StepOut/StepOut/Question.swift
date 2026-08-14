@@ -9,6 +9,12 @@ struct Question: Codable {
 
     let problem: String?
     let work: [String]?
+
+    /// How the tutor should speak when it answers.
+    var style: String?
+
+    /// What the tutor knows about them from before today.
+    var history: [String]?
 }
 
 /// A short answer, written back onto the page.

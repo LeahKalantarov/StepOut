@@ -1,0 +1,27 @@
+# How to run the StepOut backend on Render.
+#
+# The iPad talks to this server for everything: reading handwriting, checking
+# the algebra, and the tutor. Run on a Mac it only works on that Wi-Fi, which
+# is fine while building and useless for showing anybody.
+#
+# The three keys are set in the Render dashboard rather than here, because
+# this file is in the repository and they are secrets.
+services:
+  - type: web
+    name: stepout-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # $PORT is handed to us by Render and changes between deploys.
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.1"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: MYSCRIPT_APPLICATION_KEY
+        sync: false
+      - key: MYSCRIPT_HMAC_KEY
+        sync: false

@@ -38,6 +38,59 @@ def sign_request(body_text, application_key, hmac_key):
     return hmac.new(secret, body_text.encode("utf-8"), hashlib.sha512).hexdigest()
 
 
+# What a page of school algebra is allowed to contain.
+#
+# The reader is willing to see anything by default — every letter of the
+# alphabet, and a good deal besides — and many written symbols look alike. So
+# "- 2 - 2" under both sides of an equation came back as "+ 2 + z", and a
+# jotting came back as an emoji. Neither is a thing anybody writes while
+# solving for x, and the reader only offered them because nothing said it
+# could not.
+#
+# Narrowing the alphabet is MyScript's own answer to this. A 2 misread as a 6
+# is a genuinely hard problem and this will not fix it, but a 2 misread as a z
+# stops being possible at all.
+#
+# Letters are limited to x and y. Anything a student writes in words belongs on
+# a row that fails to parse as algebra, and those rows are re-read as text with
+# the whole alphabet available.
+ALGEBRA_GRAMMAR = """
+symbol = 0 1 2 3 4 5 6 7 8 9 x y + - = / . < >
+leftpar = (
+rightpar = )
+character ::= identity(symbol)
+fractionless ::= identity(character)
+               | fence(fractionless, leftpar, rightpar)
+               | hpair(fractionless, fractionless)
+               | superscript(character, fractionless)
+               | sqrt(fractionless)
+fractionable ::= identity(character)
+               | fence(fractionable, leftpar, rightpar)
+               | hpair(fractionable, fractionable)
+               | fraction(fractionless, fractionless)
+               | superscript(character, fractionable)
+               | sqrt(fractionable)
+expression ::= identity(character)
+             | fence(expression, leftpar, rightpar)
+             | hpair(expression, expression)
+             | fraction(fractionable, fractionable)
+             | superscript(character, expression)
+             | sqrt(expression)
+start(expression)
+""".strip()
+
+
+def narrowed_alphabet():
+    """
+    Whether to hold the reader to school algebra.
+
+    Behind a switch because it changes what the recognizer is capable of
+    seeing, and a bad day with it should cost one line in .env rather than a
+    code change: STEPOUT_WIDE_ALPHABET=1 hands the whole alphabet back.
+    """
+    return os.getenv("STEPOUT_WIDE_ALPHABET", "").strip() not in ("1", "true", "yes")
+
+
 def build_request_body(strokes, content_type="Math"):
     """
     Package one row of pen strokes the way MyScript expects.
@@ -49,17 +102,22 @@ def build_request_body(strokes, content_type="Math"):
     The same three shapes are "yes" to a reader expecting words and y times e
     times s to one expecting algebra, so we have to say which we want.
     """
+    # Critical: we do NOT want MyScript to solve or tidy up the math.
+    # Our whole job is catching the student's mistakes, so we need
+    # the equation exactly as it was written.
+    math = {"solver": {"enable": False}}
+
+    # Only algebra gets the narrow alphabet. A row read as words is a row that
+    # already failed to be algebra, and that is where a student writes "I need
+    # help" — which needs every letter there is.
+    if content_type == "Math" and narrowed_alphabet():
+        math["customGrammarContent"] = ALGEBRA_GRAMMAR
+
     return {
         "contentType": content_type,
         "scaleX": SCALE,
         "scaleY": SCALE,
-        "configuration": {
-            "lang": "en_US",
-            # Critical: we do NOT want MyScript to solve or tidy up the math.
-            # Our whole job is catching the student's mistakes, so we need
-            # the equation exactly as it was written.
-            "math": {"solver": {"enable": False}},
-        },
+        "configuration": {"lang": "en_US", "math": math},
         "strokes": strokes,
     }
 
@@ -87,9 +145,14 @@ def tidy_spacing(latex_text):
     time. Joining neighbouring digits and pulling a number against its
     variable gives "2x + 5 = 13", which is what the student actually wrote.
     Spaces around + - = are left alone since they aid reading.
+
+    The variable has to be a letter standing on its own. The tutor's own
+    sentences come through here too, and a rule that pulls a number against
+    any letter after it turns "40 by" into "40by" — which is not a word, and
+    is then drawn onto the page that way for the student to puzzle over.
     """
     text = re.sub(r"(?<=\d) +(?=\d)", "", latex_text)  # "1 3"  -> "13"
-    text = re.sub(r"(?<=\d) +(?=[a-z])", "", text)  # "2 x"  -> "2x"
+    text = re.sub(r"(?<=\d) +(?=[a-z]\b)", "", text)  # "2 x"  -> "2x", "40 by" left
     return text
 
 
@@ -112,6 +175,116 @@ def split_on_arrows(latex_text):
     through untouched.
     """
     return [piece.strip() for piece in ARROWS.split(latex_text) if piece.strip()]
+
+
+def without_arrows(latex_text):
+    """
+    Take the arrows out and leave the line otherwise as it was.
+
+    Not every arrow means "and then". A student expanding two brackets draws
+    loops from each term to the ones it multiplies, and those come back as
+    arrows sitting in the middle of a single equation. Split on, they cut
+
+        (x - 3)(x - 3) = 16
+
+    into a bracket and a stray "= 16", neither of which is an equation, and a
+    page with working all over it is reported as having nothing on it.
+    """
+    return re.sub(r"\s+", " ", ARROWS.sub(" ", latex_text)).strip()
+
+
+# Marks the recognizer draws over a symbol. A pen stroke that strays above the
+# line — the tail of a y from the row before, a comma, a wobble joining two
+# brackets — comes back as one of these wrapped around perfectly ordinary work.
+DECORATIONS = (
+    "widearc",
+    "overarc",
+    "wideparen",
+    "overparen",
+    "widehat",
+    "widetilde",
+    "overline",
+    "underline",
+    "overrightarrow",
+    "overleftarrow",
+    "underbrace",
+    "overbrace",
+    "mathring",
+    "hat",
+    "tilde",
+    "bar",
+    "vec",
+    "dot",
+    "ddot",
+    "acute",
+    "grave",
+    "check",
+    "breve",
+)
+
+DECORATION = re.compile(r"\\(?:" + "|".join(DECORATIONS) + r")\s*\{")
+
+
+# What the recognizer answers with when a mark on the page means nothing at
+# all — a slip of the pen, a rest of the hand, the tail of a letter from the
+# row above. SymPy turns every one of these into a variable and multiplies the
+# line by it, exactly as it did with \widearc, so a stray dot is the difference
+# between correct work and a cross in the margin.
+NOISE = re.compile(
+    r"\\(?:sim|backslash|prime|ldots|dots|cdots|vdots|angle|parallel|perp"
+    r"|square|therefore|because|circ|degree|star|ast|bullet|dagger)\b\s*"
+)
+
+
+def without_noise(latex_text):
+    """
+    Drop the marks that stand for nothing.
+    """
+    return re.sub(r"\s+", " ", NOISE.sub(" ", latex_text)).strip()
+
+
+def undecorate(latex_text):
+    """
+    Take the recognizer's decorative marks off, keeping what was underneath.
+
+    These are the difference between a correct line and a wrong one. SymPy has
+    no idea what \\widearc is, so it reads the name as a variable and multiplies
+    by it: a student who wrote
+
+        (x - 3)(x - 3) + 1 = 17
+
+    had it read back as widearc*(x - 3)*(x - 3) + 1 = 17, which is not the
+    equation they were given, and was told their working was wrong three times
+    over while the line on the page was right all along.
+
+    Nothing at this level of algebra is written with an accent over it, so a
+    decoration is always a stray pen mark and never something meant.
+    """
+    while True:
+        found = DECORATION.search(latex_text)
+
+        if not found:
+            return latex_text
+
+        # Walk to the brace that closes this one rather than the first one
+        # along, or a decoration wrapped round a fraction loses half of it.
+        opened = 1
+        at = found.end()
+
+        while at < len(latex_text) and opened:
+            if latex_text[at] == "{":
+                opened += 1
+            elif latex_text[at] == "}":
+                opened -= 1
+            at += 1
+
+        # Never closed. Better to hand back what came in than to cut the line
+        # off at a brace that was never there.
+        if opened:
+            return latex_text
+
+        inside = latex_text[found.end() : at - 1]
+        latex_text = latex_text[: found.start()] + inside + latex_text[at:]
 
 
 def heal_crossed_out_terms(latex_text):
@@ -178,7 +351,20 @@ def read_handwriting(strokes):
     Example return value: "2x+5=13"
     """
     recognized = ask_myscript(strokes, "Math", "application/x-latex,application/json")
-    return tidy_spacing(settle_letter_case(heal_crossed_out_terms(recognized)))
+    return tidy_spacing(
+        settle_letter_case(heal_crossed_out_terms(undecorate(without_noise(recognized))))
+    )
+
+
+# A lone handwritten x, read by something expecting words, comes back as a
+# printed ballot cross about as often as it comes back as the letter. None of
+# these is a character anybody writes into a question by hand, and the letter
+# they are standing in for is the one this whole app is about: "explain what x
+# is??" reached the tutor as "explain what ✗ is??".
+#
+# The multiplication sign is deliberately not here. That one really is meant
+# when it turns up, and "2 × 3" is not asking about a variable.
+BALLOT_CROSSES = str.maketrans({"✗": "x", "✘": "x", "✕": "x", "╳": "x", "⤫": "x"})
 
 
 def read_words(strokes):
@@ -189,7 +375,8 @@ def read_words(strokes):
     Reading that row as algebra would turn "yes" into y times e times s, so
     for those moments we ask MyScript for English instead.
     """
-    return ask_myscript(strokes, "Text", "text/plain").strip().lower()
+    words = ask_myscript(strokes, "Text", "text/plain").strip().lower()
+    return words.translate(BALLOT_CROSSES)
 
 
 # LaTeX commands that stand for something a student would simply write. Longer
@@ -205,6 +392,27 @@ WRITTEN_SYMBOLS = {
     r"\times": "*",
     r"\div": "/",
     r"\pm": "+/-",
+    # The printed characters too, not only the LaTeX spellings of them. The
+    # tutor's own sentences come through here, and a model asked about the
+    # quadratic formula types a real ± — which the stroke font cannot draw,
+    # so it would come out as a gap in the middle of the formula.
+    "\u00b1": "+/-",  # ±
+    "\u00f7": "/",  # ÷
+    "\u00d7": "*",  # ×
+    "\u2212": "-",  # − proper minus, not a hyphen
+    "\u22c5": "*",  # ⋅
+    "\u00b7": "*",  # ·
+    "\u221a": "sqrt",  # √
+    # Typographic characters a model reaches for without thinking. The stroke
+    # font has no glyph for any of them, so each would come out as a gap in
+    # the middle of a word.
+    "\u2019": "'",  # ’
+    "\u2018": "'",  # ‘
+    "\u201c": '"',  # “
+    "\u201d": '"',  # ”
+    "\u2014": "-",  # —
+    "\u2013": "-",  # –
+    "\u2026": "...",  # …
 }
 
 

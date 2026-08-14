@@ -1,13 +1,15 @@
-sympy
-fastapi
-uvicorn
+sympy==1.13.3
+fastapi==0.115.6
+uvicorn==0.34.0
 
 # Talks to the MyScript handwriting service
-httpx
-python-dotenv
+httpx==0.28.1
+python-dotenv==1.0.1
 
 # Lets SymPy read LaTeX (what MyScript gives us back)
 antlr4-python3-runtime==4.11
 
-# Turns a wrong step into an explanation a student can learn from
-openai
+# Turns a wrong step into an explanation a student can learn from,
+# and reads the questions off a photo of a worksheet
+openai==1.59.7
+pydantic==2.10.5

@@ -62,6 +62,16 @@ final class Paper {
 
     var isDark: Bool { shade == .slate }
 
+    /// What lies beyond the edge of the page.
+    ///
+    /// Only ever seen once the page has been pinched smaller than the screen,
+    /// and the whole job of it is to not be the page. Without it, zooming out
+    /// leaves the paper ending in the middle of a field of the same colour,
+    /// and it stops being obvious where the sheet you are writing on stops.
+    var desk: Color {
+        isDark ? Color(red: 0.05, green: 0.05, blue: 0.06) : Color(red: 0.87, green: 0.88, blue: 0.9)
+    }
+
     /// The printed rules or dots.
     var rule: Color {
         isDark ? .white.opacity(0.14) : Theme.sky.opacity(0.55)
