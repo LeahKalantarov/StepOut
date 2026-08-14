@@ -2316,6 +2316,16 @@ struct ContentView: View {
                 )
             }
 
+            // Something they stopped and asked outright, which comes first.
+            // Answered and then marked in the same breath, the reply ends up
+            // buried under a verdict nobody asked for, and stops reading as a
+            // reply at all — the student asked "why do we do it to both
+            // sides" and got told again what they had done wrong.
+            //
+            // The cross still goes beside the line, so nothing is hidden. It
+            // is the telling-off that waits, and only until the next check.
+            let answeredAQuestion = !(result.questions ?? []).isEmpty
+
             if result.ok {
                 stopListening()
 
@@ -2388,7 +2398,7 @@ struct ContentView: View {
 
                 lastWrongLine = wrongLine
 
-                if !alreadyRefused {
+                if !alreadyRefused, !answeredAQuestion {
                     let near = errorLine ?? lines.last?.lineNumber
                     var says = [(result.message ?? "something doesn't follow.").lowercased()]
 
@@ -2407,6 +2417,12 @@ struct ContentView: View {
                     } else {
                         stopListening()
                     }
+                } else {
+                    // Nothing is being offered this time round, so nothing
+                    // should be left sitting on the page waiting for a yes or
+                    // a no. A stale "want a hand?" outlives the question it
+                    // belonged to and answers for a mistake since fixed.
+                    stopListening()
                 }
             }
 
