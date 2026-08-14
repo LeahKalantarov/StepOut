@@ -1552,37 +1552,63 @@ struct ContentView: View {
         let edges = canvas.inkEdges()
         var spot = nextTutorAnchor(nearLine: nearLine, beside: bounds, pastInk: edges)
 
+        // One answer is one block: every line starts in the same place and is
+        // cut to the same width, so it reads as a rectangle and picks up and
+        // scales as a rectangle.
+        //
+        // Lines used to be filled one at a time against whatever room each
+        // one happened to have, which used the paper well and looked like a
+        // staircase — a sentence beginning beside the working, carrying on in
+        // the narrow column under it, then jumping out to the margin the
+        // moment it found an empty line.
+        //
+        // Beside the working there is only the end of a line. That is right
+        // for "correct so far." and nowhere near enough for an explanation,
+        // so anything that will not fit in the gap goes and finds clear paper
+        // where it can have the full width.
+        if rowsNeeded(sentences, into: spot.width) > 1 {
+            spot = blockRoom(
+                from: spot.line,
+                rows: rowsNeeded(sentences, into: fullWidth(onLine: spot.line)),
+                pastInk: edges
+            )
+        }
+
+        let left = spot.originX
+        let width = spot.width
+        var row = spot.line
+
         var delay = 0.0
         let batch = UUID()
 
         for sentence in sentences {
             var words = sentence.split(separator: " ").map(String.init)
 
-            // Filled a line at a time against the room that line actually has,
-            // rather than cut to one width decided by the first line. Writing
-            // that starts beside a student's working has only the end of that
-            // line; the empty lines under it have the whole page, and should
-            // use it.
             while !words.isEmpty {
-                let taken = StrokeFont.fit(words, height: tutorHeight, into: spot.width)
+                let taken = StrokeFont.fit(words, height: tutorHeight, into: width)
+
+                // A word too long for the line it was given would otherwise
+                // take nothing and leave the same words behind for ever.
+                guard !taken.line.isEmpty else { break }
 
                 tutorLines.append(
                     TutorLine(
                         batch: batch,
                         kind: kind,
                         text: taken.line,
-                        line: spot.line,
-                        originX: spot.originX,
+                        line: row,
+                        originX: left,
                         delay: delay
                     )
                 )
 
                 delay += HandwrittenLine.writingTime(for: taken.line) + 0.05
                 words = taken.rest
-
-                spot = nextRoom(from: spot.line + 1, pastInk: edges)
+                row += 1
             }
         }
+
+        spot = Spot(line: max(spot.line, row - 1), originX: left, width: width)
 
         growPage()
         scrollIntoView(line: spot.line)
@@ -1719,6 +1745,66 @@ struct ContentView: View {
 
     /// How much paper to leave down the right-hand side.
     private var rightMargin: CGFloat { 20 }
+
+    /// The whole width of a ruled line, ignoring anything written on it.
+    func fullWidth(onLine line: Int) -> CGFloat {
+        pageWidth - rightMargin - NotebookLayout.penStart(onLine: line).x
+    }
+
+    /// How many ruled lines some writing will take at a given width.
+    func rowsNeeded(_ sentences: [String], into width: CGFloat) -> Int {
+        var rows = 0
+
+        for sentence in sentences {
+            var words = sentence.split(separator: " ").map(String.init)
+
+            while !words.isEmpty {
+                let taken = StrokeFont.fit(words, height: tutorHeight, into: width)
+
+                // Nothing fitted, so nothing ever will. Counted as a line so
+                // the caller still has somewhere to put it.
+                guard !taken.line.isEmpty else {
+                    rows += 1
+                    break
+                }
+
+                rows += 1
+                words = taken.rest
+            }
+        }
+
+        return max(1, rows)
+    }
+
+    /// A run of clear ruled lines to lay a whole block on.
+    ///
+    /// Found all at once rather than a line at a time, because every line in
+    /// a block has to start in the same place, and that is only safe where
+    /// the lines under the first one are empty too.
+    func blockRoom(from line: Int, rows: Int, pastInk edges: [Int: CGFloat]) -> Spot {
+        func clear(_ row: Int) -> Bool {
+            let margin = NotebookLayout.penStart(onLine: row).x
+            let inked = (edges[row] ?? margin) > margin
+            return !inked && !tutorLines.contains { $0.line == row }
+        }
+
+        for start in line...(line + 30) where (start..<(start + rows)).allSatisfy(clear) {
+            return Spot(
+                line: start,
+                originX: NotebookLayout.penStart(onLine: start).x,
+                width: fullWidth(onLine: start)
+            )
+        }
+
+        // Nowhere on the page it would fit — go below everything.
+        let below = max(lowestUsedLine() + 1, line + 1)
+
+        return Spot(
+            line: below,
+            originX: NotebookLayout.penStart(onLine: below).x,
+            width: fullWidth(onLine: below)
+        )
+    }
 
     /// The narrowest gap worth writing in.
     ///
