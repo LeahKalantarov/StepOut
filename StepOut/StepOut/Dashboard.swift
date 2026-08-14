@@ -67,11 +67,20 @@ struct Dashboard: View {
     // MARK: - Pieces
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
+        // Topped rather than baselined: the name is artwork now, and artwork
+        // has no text baseline for the settings button to line up against.
+        HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("StepOut")
-                    .font(.largeTitle.weight(.heavy))
-                    .foregroundStyle(Theme.ink)
+                // Drawn rather than typed, because the blocks are part of the
+                // name and the spacing between them has to hold. 40pt is the
+                // artwork's own height, so it lands on whole pixels and the
+                // block outlines stay sharp.
+                Image("Wordmark")
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(height: 40)
+                    .accessibilityLabel("StepOut")
 
                 Text(greeting)
                     .font(.subheadline)
