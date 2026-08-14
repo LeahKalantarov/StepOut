@@ -295,17 +295,20 @@ struct ContentView: View {
     // MARK: - Header
 
     var appHeader: some View {
-        HStack(spacing: 16) {
+        HStack(alignment: .center, spacing: 16) {
             // Drawn rather than set: the blocks are part of the name, and
             // the two have to keep their spacing. Height is fixed and the
             // width follows, so the lockup is never squashed.
+            // 40pt is exactly the artwork's @3x height, so it lands on whole
+            // pixels and the block outlines stay sharp.
             Image("Wordmark")
                 .resizable()
-                .scaledToFit()
-                .frame(height: 34)
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(height: 40)
                 .accessibilityLabel("StepOut")
 
-            Spacer()
+            Spacer(minLength: 12)
 
             if !problems.isEmpty {
                 Text("\(currentIndex + 1) of \(problems.count)")
@@ -331,8 +334,8 @@ struct ContentView: View {
             .disabled(isChecking)
             .opacity(isChecking ? 0.6 : 1)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 16)
         .background(Theme.paper)
         .overlay(alignment: .bottom) {
             Rectangle()
