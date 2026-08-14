@@ -1,8 +1,6 @@
 import Foundation
 
-// Matches the JSON that backend/main.py sends back, for example:
-// { "ok": true, "solved": true, "answer": "x = 4", "recognized": [...] }
-// { "ok": false, "error_step": 3, "message": "..." }
+// Matches the JSON that backend/main.py sends back.
 struct CheckResult: Codable {
     let ok: Bool
     let errorStep: Int?
@@ -25,6 +23,15 @@ struct CheckResult: Codable {
     // Usually annotations like "-5  -5", or a cross-out the recognizer
     // turned into nonsense. Shown so a surprising verdict is explainable.
     let ignored: [String]?
+
+    /// Why the step failed — wrong_answer, wrong_divisor, divided_one_side, …
+    let reason: String?
+
+    /// What the previous line actually implies, e.g. "x = 4"
+    let expectedAnswer: String?
+
+    /// What we think the student wrote for the bad step
+    let studentAnswer: String?
 
     // Everything a lesson about this mistake would need, when the step was
     // wrong. Held onto in case the student asks for help, and handed straight
@@ -54,4 +61,66 @@ struct HelpContext: Codable {
     /// tutor has to guess from two equations, and a dropped answer looks like
     /// sound working until you count the answers.
     let reason: String?
+
+    let expectedAnswer: String?
+    let expectedDivisor: String?
+    let guessedDivisor: String?
+}
+
+struct TutorResponse: Codable {
+    let reply: String
+    let prompt: String?
+    let source: String?
+    let isPushback: Bool?
+}
+
+struct PhotoUploadResponse: Codable {
+    let ok: Bool
+    let photos: [String]?
+}
+
+struct NotesUploadResponse: Codable {
+    let ok: Bool
+    let notes: String?
+}
+
+struct TutorCheckPayload: Codable {
+    let ok: Bool
+    let errorStep: Int?
+    let message: String?
+    let reason: String?
+    let expectedAnswer: String?
+    let studentAnswer: String?
+    let solved: Bool?
+    let answer: String?
+}
+
+/// Turns a CheckResult into the dictionary the tutor endpoint expects.
+extension CheckResult {
+    func asDictionary() -> [String: Any] {
+        var dict: [String: Any] = ["ok": ok]
+
+        if let errorStep { dict["error_step"] = errorStep }
+        if let message { dict["message"] = message }
+        if let reason { dict["reason"] = reason }
+        if let expectedAnswer { dict["expected_answer"] = expectedAnswer }
+        if let studentAnswer { dict["student_answer"] = studentAnswer }
+        if let solved { dict["solved"] = solved }
+        if let answer { dict["answer"] = answer }
+
+        return dict
+    }
+
+    func tutorPayload() -> TutorCheckPayload {
+        TutorCheckPayload(
+            ok: ok,
+            errorStep: errorStep,
+            message: message,
+            reason: reason,
+            expectedAnswer: expectedAnswer,
+            studentAnswer: studentAnswer,
+            solved: solved,
+            answer: answer
+        )
+    }
 }
