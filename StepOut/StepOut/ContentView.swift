@@ -297,9 +297,14 @@ struct ContentView: View {
     var appHeader: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("StepOut")
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                    .foregroundStyle(Theme.ink)
+                // Drawn rather than set: the blocks are part of the name, and
+                // the two have to keep their spacing. Height is fixed and the
+                // width follows, so the lockup is never squashed.
+                Image("Wordmark")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 34)
+                    .accessibilityLabel("StepOut")
 
                 Text(AppBuild.marker)
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))

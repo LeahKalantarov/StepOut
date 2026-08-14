@@ -2,5 +2,5 @@ import Foundation
 
 /// Changes when you pull a new build — confirm this shows in the header.
 enum AppBuild {
-    static let marker = "assignment-v5"
+    static let marker = "logo-v6"
 }
