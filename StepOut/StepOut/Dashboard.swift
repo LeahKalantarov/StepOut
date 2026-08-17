@@ -60,7 +60,7 @@ struct Dashboard: View {
             Button("Delete", role: .destructive) { onDelete(session) }
             Button("Keep it", role: .cancel) {}
         } message: { session in
-            Text("Every page in it goes too — \(session.summary). This cannot be undone.")
+            Text("Every page in it goes too: \(session.summary). This cannot be undone.")
         }
     }
 
@@ -70,26 +70,16 @@ struct Dashboard: View {
         // Topped rather than baselined: the name is artwork now, and artwork
         // has no text baseline for the settings button to line up against.
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                // Drawn rather than typed, because the blocks are part of the
-                // name and the spacing between them has to hold. 40pt is the
-                // artwork's own height, so it lands on whole pixels and the
-                // block outlines stay sharp.
-                Image("Wordmark")
-                    .resizable()
-                    .interpolation(.high)
-                    .aspectRatio(contentMode: .fit)
-                    .frame(height: 40)
-                    .accessibilityLabel("StepOut")
-
-                Text(greeting)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.ink.opacity(0.6))
-
-                Text(AppBuild.marker)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Theme.ink.opacity(0.35))
-            }
+            // Drawn rather than typed, because the blocks are part of the name
+            // and the spacing between them has to hold. 40pt is the artwork's
+            // own height, so it lands on whole pixels and the block outlines
+            // stay sharp.
+            Image("Wordmark")
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(height: 40)
+                .accessibilityLabel("StepOut")
 
             Spacer()
 
@@ -103,12 +93,6 @@ struct Dashboard: View {
             }
             .buttonStyle(.plain)
         }
-    }
-
-    private var greeting: String {
-        library.sessions.isEmpty
-            ? "Let's get started."
-            : "Pick up where you left off."
     }
 
     /// The chart, as three numbers. The same record the tutor reads.

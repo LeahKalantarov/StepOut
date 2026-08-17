@@ -13,6 +13,7 @@ from checker.handwriting import (
     as_written,
     read_handwriting,
     read_words,
+    rows_stacked_in,
     split_on_arrows,
     without_arrows,
 )
@@ -82,6 +83,14 @@ class HandwritingRequest(BaseModel):
     # What the tutor already knows about them, kept on their iPad and sent
     # here rather than stored. Already summarised into a few sentences.
     history: list[str] | None = None
+
+    # Questions on this page that have been answered once already.
+    #
+    # A question is written in ink and the ink stays there. Without this, every
+    # check for the rest of the page reads those same two question marks, sends
+    # them off to be answered again, and writes the answer out a second time
+    # underneath the first.
+    answered: list[str] | None = None
 
 
 class PhotoRequest(BaseModel):
@@ -196,13 +205,21 @@ def steps_written_on(latex):
 
     So a split has to earn it: every piece must be an equation in its own
     right, or the arrows were never separators and the line is read whole.
+
+    Writing stacked one line above another arrives as a matrix, and is taken
+    apart first. Each line it held is then read for arrows like any other.
     """
-    pieces = split_on_arrows(latex)
+    steps = []
 
-    if len(pieces) > 1 and all(is_an_equation(piece) for piece in pieces):
-        return pieces
+    for line in rows_stacked_in(latex):
+        pieces = split_on_arrows(line)
 
-    return [without_arrows(latex)]
+        if len(pieces) > 1 and all(is_an_equation(piece) for piece in pieces):
+            steps.extend(pieces)
+        else:
+            steps.append(without_arrows(line))
+
+    return steps
 
 
 def asking_for_help(words):
@@ -247,17 +264,34 @@ def marked_as_a_question(words):
     return words.replace(" ", "").endswith("??")
 
 
-def questions_on_the_page(unread, problem, work):
+def as_asked(words):
+    """
+    A question reduced to the part of it that makes it that question.
+
+    Used to tell a question we have answered from one we have not. The raw
+    string is too brittle a thing to remember an answer by: the same ink read
+    twice comes back with the spacing moved around and a question mark more or
+    less, so "why both sides??" and "why both sides ? ?" have to count as one.
+    """
+    return re.sub(r"[^a-z0-9]+", "", words.lower())
+
+
+def questions_on_the_page(unread, problem, work, answered=None):
     """
     Read the rows that were not algebra, and answer any that were questions.
 
     Anything else on those rows is left alone. Working out is full of lines
     that are not equations — a crossed-out term, "-5" written under both
     sides — and answering those would be worse than ignoring them.
+
+    A question already answered is passed over. The ink does not go anywhere
+    once it has been answered, so without this it is read again on every check
+    for the rest of the page, and answered again each time.
     """
+    already = {as_asked(one) for one in answered or []}
     replies = []
 
-    for strokes in unread[-MOST_ROWS_TO_REREAD:]:
+    for row, strokes in unread[-MOST_ROWS_TO_REREAD:]:
         try:
             words = read_words(strokes)
         except Exception:
@@ -276,17 +310,24 @@ def questions_on_the_page(unread, problem, work):
             continue
 
         asked = words.strip().lstrip("*").strip()
+
+        if as_asked(asked) in already:
+            note(f"already answered, leaving it alone: {asked!r}")
+            continue
+
         reply = answer(asked, problem, work)
 
         if reply:
-            replies.append({"asked": asked, "answer": reply})
+            # The row it was asked on goes back with it, so the answer can be
+            # written beside the question rather than at the foot of the page.
+            replies.append({"asked": asked, "answer": reply, "row": row})
 
     return replies
 
 
 @app.get("/")
 def home():
-    return {"message": "StepOut API — send a POST request to /check"}
+    return {"message": "StepOut API. Send a POST request to /check."}
 
 
 @app.post("/check")
@@ -319,6 +360,20 @@ def check_handwriting(request: HandwritingRequest):
         ignored = []
         unread = []
 
+        # The question they are on, needed for checking their first line against
+        # it, for answering anything they asked about it, and for knowing which
+        # letters are allowed to appear in their working.
+        problem_text = request.problem_text
+        problem_equation = None
+
+        if problem_text is not None:
+            try:
+                problem_equation = parse_equation(problem_text)
+            except Exception:
+                problem_equation = None
+
+        unknowns = problem_equation.free_symbols if problem_equation is not None else set()
+
         for row_number, row in enumerate(request.rows):
             if len(row.strokes) == 0:
                 continue
@@ -347,6 +402,16 @@ def check_handwriting(request: HandwritingRequest):
                     ignored.append(as_written(step))
                     continue
 
+                # A line that brings in a letter the question does not have is a
+                # misreading, not a step. Solving x + 4 = 11 never involves a y,
+                # so when a handwritten 4 comes back as one, the line has to be
+                # passed over rather than chained onto the working, where it
+                # would fail every step that followed it.
+                if unknowns and not equation.free_symbols <= unknowns:
+                    note(f"not in the question's letters, passing over: {step!r}")
+                    ignored.append(as_written(step))
+                    continue
+
                 equations.append(equation)
                 recognized.append(step)
 
@@ -359,20 +424,11 @@ def check_handwriting(request: HandwritingRequest):
 
             # No algebra on this row at all. It might not have been algebra.
             if found_here == 0 and len(row.strokes) >= LEAST_STROKES_FOR_WORDS:
-                unread.append(strokes)
+                unread.append((row_number + 1, strokes))
 
-        # The question they are on, needed both for checking their first line
-        # against it and for answering anything they asked about it.
-        problem_text = request.problem_text
-        problem_equation = None
-
-        if problem_text is not None:
-            try:
-                problem_equation = parse_equation(problem_text)
-            except Exception:
-                problem_equation = None
-
-        asked = questions_on_the_page(unread, problem_text, written)
+        asked = questions_on_the_page(
+            unread, problem_text, written, request.answered
+        )
 
         if len(equations) == 0:
             return {
@@ -384,7 +440,7 @@ def check_handwriting(request: HandwritingRequest):
                 # do not send them away to write algebra first.
                 "message": None
                 if asked
-                else "No equations found yet — write a full line like 2x = 8.",
+                else "No equations found yet. Write a full line like 2x = 8.",
             }
 
         result = check_page(equations, written, problem_equation)

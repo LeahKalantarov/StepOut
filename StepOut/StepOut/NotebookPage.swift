@@ -39,6 +39,14 @@ struct NotebookPage: UIViewRepresentable {
     /// sheet of notes and a graph cannot be redrawn at writing speed.
     let onSettled: () -> Void
 
+    /// Called each time the pencil is lifted, once per stroke.
+    ///
+    /// Separate from `onSettled` because some things have to happen while the
+    /// student is still working rather than once they have stopped. Crossing
+    /// the tutor's writing out is one: waiting two seconds to find out whether
+    /// a gesture did anything reads as the app having missed it.
+    let onStroke: () -> Void
+
     /// Called as the page is scrolled, with where the corner of the screen now
     /// sits on it. Sideways as well as down, because a page pinched larger
     /// than the screen can be moved either way.
@@ -176,6 +184,7 @@ struct NotebookPage: UIViewRepresentable {
         context.coordinator.onSqueeze = onSqueeze
         context.coordinator.onWriting = onWriting
         context.coordinator.onSettled = onSettled
+        context.coordinator.onStroke = onStroke
         context.coordinator.onScroll = onScroll
         context.coordinator.onZoom = onZoom
         context.coordinator.onDoubleTap = onDoubleTap
@@ -189,6 +198,7 @@ struct NotebookPage: UIViewRepresentable {
             onSqueeze: onSqueeze,
             onWriting: onWriting,
             onSettled: onSettled,
+            onStroke: onStroke,
             onScroll: onScroll,
             onZoom: onZoom,
             onDoubleTap: onDoubleTap,
@@ -210,6 +220,7 @@ struct NotebookPage: UIViewRepresentable {
         var onSqueeze: () -> Void
         var onWriting: () -> Void
         var onSettled: () -> Void
+        var onStroke: () -> Void
         var onScroll: (CGPoint) -> Void
         var onZoom: (CGFloat) -> Void
         var onDoubleTap: (CGPoint) -> Void
@@ -221,6 +232,7 @@ struct NotebookPage: UIViewRepresentable {
             onSqueeze: @escaping () -> Void,
             onWriting: @escaping () -> Void,
             onSettled: @escaping () -> Void,
+            onStroke: @escaping () -> Void,
             onScroll: @escaping (CGPoint) -> Void,
             onZoom: @escaping (CGFloat) -> Void,
             onDoubleTap: @escaping (CGPoint) -> Void,
@@ -231,6 +243,7 @@ struct NotebookPage: UIViewRepresentable {
             self.onSqueeze = onSqueeze
             self.onWriting = onWriting
             self.onSettled = onSettled
+            self.onStroke = onStroke
             self.onScroll = onScroll
             self.onZoom = onZoom
             self.onDoubleTap = onDoubleTap
@@ -313,13 +326,15 @@ struct NotebookPage: UIViewRepresentable {
         /// How long the pencil has to be still before the page counts as ready
         /// to read.
         ///
-        /// Long on purpose. Anything shorter catches people between one step
-        /// and the next — thinking, or reaching for the next line — and being
-        /// stopped there is being interrupted rather than helped. Four seconds
-        /// is longer than a pause inside a piece of working and shorter than
-        /// the wait before you would wonder whether anything was going to
-        /// happen at all.
-        private static let stillFor: TimeInterval = 4
+        /// A balance between two ways of getting it wrong. Too short catches
+        /// people between one step and the next, thinking or reaching for the
+        /// next line, and being stopped there is being interrupted rather than
+        /// helped. Too long and nothing appears to be happening at all.
+        ///
+        /// Three seconds sits nearer the short end of that: responsive enough
+        /// to feel like it is watching, long enough to sit through the pause
+        /// in the middle of a line.
+        private static let stillFor: TimeInterval = 3
 
         /// The wait for a pen that has stopped, torn up by the next stroke.
         private var settling: DispatchWorkItem?
@@ -334,6 +349,8 @@ struct NotebookPage: UIViewRepresentable {
         /// This fires once per stroke, unlike a drawing change, and only ever
         /// between strokes — which is exactly when it is safe to read the page.
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            onStroke()
+
             settling?.cancel()
 
             let quiet = DispatchWorkItem { [weak self] in

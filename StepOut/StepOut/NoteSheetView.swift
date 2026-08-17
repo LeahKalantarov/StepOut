@@ -59,6 +59,14 @@ struct SheetLayout {
     /// square, because a parabola in a letterbox does not look like a parabola.
     static let graphAspect: CGFloat = 0.78
 
+    /// How tall a graph is ever allowed to be.
+    ///
+    /// A curve does not get more readable past a certain size, it only takes
+    /// more of the sheet. Without this, a graph in a one-column layout is
+    /// drawn the full width of the page and the two lines saying what to look
+    /// at end up somewhere below the fold.
+    static let tallestGraph: CGFloat = 240
+
     /// Below this a sheet is laid out in one column. Two columns of 150 points
     /// each would break every line into three.
     static let leastForTwoColumns: CGFloat = 620
@@ -95,11 +103,17 @@ struct SheetLayout {
             var graph: CGRect?
 
             if card.graph != nil {
+                // Capped, and centred in whatever is left over, so a graph in
+                // a wide box sits in the middle of it rather than stretching
+                // to the edges.
+                let room = boxWidth - padding * 2
+                let drawn = min(room, tallestGraph / graphAspect)
+
                 let box = CGRect(
-                    x: padding,
+                    x: padding + (room - drawn) / 2,
                     y: boxHeight,
-                    width: boxWidth - padding * 2,
-                    height: (boxWidth - padding * 2) * graphAspect
+                    width: drawn,
+                    height: drawn * graphAspect
                 )
 
                 graph = box

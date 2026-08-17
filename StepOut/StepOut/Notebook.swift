@@ -36,6 +36,35 @@ final class Library {
             }
             return page
         }
+
+        tidyNames()
+    }
+
+    /// Give every session still carrying its date a name off its own work.
+    ///
+    /// Sessions were named after the day they were started, which is useful
+    /// for about a day. A dashboard of "Thursday 13 Aug" and "Friday 14 Aug"
+    /// tells you when you sat down and nothing about what you sat down to, so
+    /// finding the quadratics again means opening three of them.
+    ///
+    /// Only ever touches names nobody chose. A session somebody has renamed by
+    /// hand keeps that name whatever is written inside it.
+    private func tidyNames() {
+        var renamed = false
+
+        for at in sessions.indices where Library.isAutomatic(sessions[at]) {
+            let sheet = sessions[at].pages.compactMap { work[$0.id]?.sheet?.title }.first
+            let title = sheet ?? sessions[at].questions.first?.name
+
+            guard let title, !title.trimmingCharacters(in: .whitespaces).isEmpty else {
+                continue
+            }
+
+            sessions[at].name = title
+            renamed = true
+        }
+
+        if renamed { save() }
     }
 
     // MARK: - Reading
@@ -104,10 +133,37 @@ final class Library {
         LibraryStore.save(SavedLibrary(sessions: sessions, work: work))
     }
 
-    /// A name for a session started from nothing. Today's date reads better
-    /// than "Session 4" and tells you something "Session 4" does not.
+    /// Name the open session after the work that has just landed in it.
+    ///
+    /// A session is made before its photograph has been read, so the only
+    /// thing there is to call it at that point is the date. This is the second
+    /// chance, once there is a title on the notes to use instead.
+    func nameOpenSession(after title: String) {
+        let wanted = title.trimmingCharacters(in: .whitespaces)
+
+        guard !wanted.isEmpty else { return }
+
+        change { session in
+            guard Library.isAutomatic(session) else { return }
+
+            session.name = wanted
+        }
+    }
+
+    /// A name for a session with nothing in it yet to name it after. Today's
+    /// date reads better than "Session 4" and tells you something "Session 4"
+    /// does not.
     func nameForNewSession() -> String {
-        Date().formatted(.dateTime.weekday(.wide).day().month(.abbreviated))
+        Library.dateName(for: Date())
+    }
+
+    /// Whether a session is still called what the app called it.
+    static func isAutomatic(_ session: Session) -> Bool {
+        session.name == dateName(for: session.started)
+    }
+
+    static func dateName(for date: Date) -> String {
+        date.formatted(.dateTime.weekday(.wide).day().month(.abbreviated))
     }
 }
 

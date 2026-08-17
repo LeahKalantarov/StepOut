@@ -36,7 +36,7 @@ struct PhotoPrompt: View {
     private let suggestions = [
         "Copy these questions out so I can do them",
         "Explain this page and then give me questions to practice",
-        "Teach me this — I don't understand it",
+        "Teach me this, I don't understand it",
         "Just give me harder questions on this",
     ]
 

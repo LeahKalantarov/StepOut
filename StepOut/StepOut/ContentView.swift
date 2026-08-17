@@ -37,14 +37,17 @@ struct ContentView: View {
 
     // Which ruled line to mark, and whether the mark is a cross or a tick.
     @State private var errorLine: Int?
-    @State private var solvedLine: Int?
+    // Plural, because a quadratic has two answers and a student who wrote both
+    // has got both right. Ticking only the lower of them says the other one
+    // was not read.
+    @State private var solvedLines: [Int] = []
 
     // Where on the page those two lines were written, so the writing itself
     // can be marked and not just the margin beside it. A tick eight inches to
     // the left of the answer is a footnote; a ring around the answer is the
     // thing a teacher actually does with a red pen.
     @State private var errorInk: CGRect?
-    @State private var solvedInk: CGRect?
+    @State private var solvedInks: [CGRect] = []
 
     @State private var feedback: Feedback?
 
@@ -185,6 +188,12 @@ struct ContentView: View {
     // and having the paper slide out from under a pencil is worse than not
     // seeing the answer until you look up.
     @State private var writingQuietly = false
+
+    // Questions on this page that have been answered once already. Sent with
+    // every check so the server passes over them: the two question marks that
+    // asked are written in ink, and ink stays where it is, so otherwise the
+    // same question is read and answered afresh on every check that follows.
+    @State private var answeredQuestions: [String] = []
 
     // The last thing the tutor said, so that rechecking unchanged work does
     // not write the same verdict out underneath itself.
@@ -514,6 +523,7 @@ struct ContentView: View {
                     onSqueeze: { pen.isErasing.toggle() },
                     onWriting: { noticeWriting() },
                     onSettled: { penStopped() },
+                    onStroke: { strokeFinished() },
                     onScroll: { scrolledTo = $0 },
                     onZoom: { zoom = $0 },
                     onDoubleTap: { point in
@@ -1088,7 +1098,7 @@ struct ContentView: View {
     /// the margin — so measuring the whole batch from the first line's corner
     /// puts the catchable patch somewhere the writing mostly is not.
     func batchBounds(_ batch: TutorBatch) -> CGRect {
-        let (offset, scale) = placement(of: batch)
+        let (offset, _) = placement(of: batch)
 
         if collapsedBatches.contains(batch.id) {
             // Folded, it is one line of small print however long it was open.
@@ -1173,8 +1183,8 @@ struct ContentView: View {
                 mark("✗", color: .red, onLine: errorLine)
             }
 
-            if let solvedLine {
-                mark("✓", color: .green, onLine: solvedLine)
+            ForEach(solvedLines, id: \.self) { line in
+                mark("✓", color: .green, onLine: line)
             }
         }
     }
@@ -1186,8 +1196,8 @@ struct ContentView: View {
     /// never takes a touch meant for the pen.
     var inkMarks: some View {
         ZStack(alignment: .topLeading) {
-            if let solvedInk {
-                highlight(solvedInk, color: .green)
+            ForEach(Array(solvedInks.enumerated()), id: \.offset) { _, ink in
+                highlight(ink, color: .green)
             }
 
             if let errorInk {
@@ -1251,13 +1261,14 @@ struct ContentView: View {
         collapsedBatches = saved.collapsed
         batchOffsets = saved.offsets
         batchScales = saved.scales
+        answeredQuestions = saved.answered ?? []
 
         // Marks are the last check's opinion of another page, so they go. The
         // next check puts them back where they belong.
         errorLine = nil
-        solvedLine = nil
+        solvedLines = []
         errorInk = nil
-        solvedInk = nil
+        solvedInks = []
         lastWrongLine = nil
         declinedHelpFor = nil
         lastSaid = []
@@ -1281,7 +1292,8 @@ struct ContentView: View {
             tutorLines: tutorLines,
             collapsed: collapsedBatches,
             offsets: batchOffsets,
-            scales: batchScales
+            scales: batchScales,
+            answered: answeredQuestions
         )
     }
 
@@ -1429,6 +1441,14 @@ struct ContentView: View {
 
             library.change { $0.pages += [notes].compactMap { $0 } + questions }
 
+            // The session was made before the photograph had been read, so
+            // until now the only thing there was to call it was the date. The
+            // notes have a title on them by this point, and that is the thing
+            // somebody scanning the dashboard is actually looking for.
+            if let title = reading.sheet?.title ?? reading.problems.first?.equation {
+                library.nameOpenSession(after: title)
+            }
+
             // Open the notes if there are any, since that is what you read
             // first, and otherwise the first question. Either way this is a
             // fresh page, so there is no work to lose by turning to it.
@@ -1445,7 +1465,6 @@ struct ContentView: View {
                 keep()
             }
 
-            show(Feedback(text: summary(of: reading), tone: .good))
         } catch is CancellationError {
             return
         } catch {
@@ -1483,9 +1502,9 @@ struct ContentView: View {
         canvas.erasePage()
         stopWatching()
         errorLine = nil
-        solvedLine = nil
+        solvedLines = []
         errorInk = nil
-        solvedInk = nil
+        solvedInks = []
         stopListening()
         writingTask?.cancel()
         writingSince = nil
@@ -1495,6 +1514,7 @@ struct ContentView: View {
         declinedHelpFor = nil
         lastSaid = []
         lastSaidAbout = -1
+        answeredQuestions = []
         collapsedBatches = []
         batchOffsets = [:]
         batchScales = [:]
@@ -1509,6 +1529,21 @@ struct ContentView: View {
     }
 
     // MARK: - Asking for help
+
+    /// What goes beside the ring round a finished answer.
+    ///
+    /// Short on purpose. It has to fit in the gap to the right of the working
+    /// to sit with the ring at all; a sentence longer than the gap goes and
+    /// finds clear paper further down, which is nowhere near the thing it is
+    /// congratulating.
+    func solvedNote(_ answer: String?) -> String {
+        let found = answer.map { " \($0)" } ?? ""
+
+        switch voice {
+        case .encouraging: return "solved! nice work.\(found)".lowercased()
+        case .direct, .thorough: return "solved!\(found)".lowercased()
+        }
+    }
 
     /// Write something on the page in the tutor's hand.
     ///
@@ -1815,6 +1850,30 @@ struct ContentView: View {
     /// same as wide enough to read, and there is a whole empty page below.
     private var leastUsefulWidth: CGFloat { 280 }
 
+    /// The line the student wrote on most recently.
+    ///
+    /// Not the same as the bottom line of the page, which is what the last of
+    /// `workingLines` gives, and the difference is the whole bug it exists to
+    /// fix. Somebody who writes "-2 -2" under their second step and then
+    /// carries on filling in the lines above it has their newest work in the
+    /// middle of the paper and an old annotation at the foot of it. A remark
+    /// anchored to the foot of the page then lands beside that annotation
+    /// every single time, however far the working has moved on, so "correct
+    /// so far" appears to be stuck in one spot.
+    ///
+    /// Found by which row the newest stroke falls in rather than by measuring
+    /// its height against the ruled lines, so there is no second opinion about
+    /// where a line starts.
+    func lineJustWritten() -> WrittenLine? {
+        let rows = canvas.workingLines(pageWidth: pageWidth)
+
+        guard let newest = canvas.drawing.strokes.last else { return rows.last }
+
+        let mark = newest.renderBounds
+
+        return rows.first { $0.bounds.intersects(mark) } ?? rows.last
+    }
+
     /// The lowest ruled line anything occupies, for growing the page.
     func lowestUsedLine() -> Int {
         var lowest = 0
@@ -1980,6 +2039,19 @@ struct ContentView: View {
     /// coordinator instead, which can watch the pencil without redrawing
     /// anything.
     func noticeWriting() {
+        // A check marks the page as it was at the moment it was sent. Keep
+        // writing, or rub something out, and the verdict that comes back is
+        // about work that is no longer there: a slip you had already spotted
+        // and were part-way through erasing gets marked wrong anyway, and the
+        // cross lands beside a line you have since changed.
+        //
+        // Called off rather than ignored on arrival, so the wait is not spent
+        // either. Stopping restarts it: the pen settling is what asks for a
+        // check, and it will ask again a couple of seconds after this one.
+        if isChecking {
+            checkTask?.cancel()
+        }
+
         guard offer != nil else { return }
 
         replyTask?.cancel()
@@ -1999,6 +2071,142 @@ struct ContentView: View {
                 penStopped()
             }
         }
+    }
+
+    /// The pencil has been lifted at the end of a stroke.
+    func strokeFinished() {
+        crossOutTutorText()
+    }
+
+    /// Rub out a tutor note that has just had a cross drawn over it.
+    ///
+    /// Scribbling over something you are done with is what people do to paper,
+    /// and it needs no explaining, no menu, and no free hand. The alternative
+    /// already there is a double tap and then a button, which asks you to put
+    /// the pencil down.
+    ///
+    /// Deliberately hard to do by accident. A cross has to be drawn deliberately
+    /// across the note to count, because a page of algebra is covered in small
+    /// crossing strokes, and an x that quietly deleted an explanation would be
+    /// far worse than a gesture that sometimes has to be repeated.
+    func crossOutTutorText() {
+        let strokes = canvas.drawing.strokes
+
+        guard strokes.count >= 2 else { return }
+
+        let first = strokes[strokes.count - 2]
+        let second = strokes[strokes.count - 1]
+
+        guard
+            let oneWay = straightRun(first),
+            let theOther = straightRun(second),
+            crosses(oneWay, theOther)
+        else {
+            return
+        }
+
+        let drawn = first.renderBounds.union(second.renderBounds)
+
+        // Over the note rather than merely touching it. Anything less and the
+        // working written beside a note could reach across and take it.
+        guard
+            let struck = tutorBatches.first(where: { batch in
+                let box = batchBounds(batch)
+
+                return box.width > 0
+                    && drawn.intersection(box).width >= box.width * 0.55
+                    && drawn.intersection(box).height >= box.height * 0.55
+            })
+        else {
+            return
+        }
+
+        removeBatch(struck)
+
+        // The cross goes too. It was a gesture rather than working, and left
+        // behind it would be read as algebra on the next check.
+        var page = canvas.drawing
+        page.strokes.removeLast(2)
+        canvas.drawing = page
+
+        // Two strokes fewer than the last check saw, which on its own reads as
+        // rubbing out a step and asks for the page to be marked again. Nothing
+        // about the student's own work changed here.
+        stopWatching()
+        keep()
+    }
+
+    /// A stroke as the straight line it was going for, or nil if it bends.
+    ///
+    /// Measured by how far the pen travelled against how far it ended up from
+    /// where it started. A straight stroke is barely longer than the gap it
+    /// spans; a letter, a loop or a scribble is several times longer.
+    func straightRun(_ stroke: PKStroke) -> (from: CGPoint, to: CGPoint)? {
+        let path = stroke.path
+
+        guard path.count >= 2 else { return nil }
+
+        // Through the stroke's own transform, because that is what puts it
+        // where the tutor's writing is measured.
+        func at(_ step: CGFloat) -> CGPoint {
+            path.interpolatedLocation(at: step).applying(stroke.transform)
+        }
+
+        let from = at(0)
+        let to = at(CGFloat(path.count - 1))
+
+        let span = hypot(to.x - from.x, to.y - from.y)
+
+        // Shorter than this and it is handwriting. A written x is a couple of
+        // dozen points across; a cross drawn over a note is the width of it.
+        guard span >= 70 else { return nil }
+
+        var travelled: CGFloat = 0
+        var last = from
+
+        for step in stride(from: CGFloat(0), to: CGFloat(path.count - 1), by: 1) {
+            let here = at(step)
+            travelled += hypot(here.x - last.x, here.y - last.y)
+            last = here
+        }
+
+        guard travelled <= span * 1.4 else { return nil }
+
+        return (from, to)
+    }
+
+    /// Whether two straight strokes cut across one another.
+    ///
+    /// Both that they meet and that they meet at a proper angle: two strokes
+    /// along the same line cross by the letter of the maths and are a crossing
+    /// out rather than a cross.
+    func crosses(
+        _ one: (from: CGPoint, to: CGPoint),
+        _ other: (from: CGPoint, to: CGPoint)
+    ) -> Bool {
+        let a = CGPoint(x: one.to.x - one.from.x, y: one.to.y - one.from.y)
+        let b = CGPoint(x: other.to.x - other.from.x, y: other.to.y - other.from.y)
+
+        let turn = abs(atan2(a.y, a.x) - atan2(b.y, b.x))
+        let between = min(turn, 2 * .pi - turn)
+
+        guard between > .pi / 5, between < .pi - .pi / 5 else { return false }
+
+        // Each stroke has to have the other's ends on opposite sides of it.
+        return straddles(one, other) && straddles(other, one)
+    }
+
+    /// Whether a line has both ends of another line on opposite sides of it.
+    func straddles(
+        _ line: (from: CGPoint, to: CGPoint),
+        _ other: (from: CGPoint, to: CGPoint)
+    ) -> Bool {
+        func side(_ point: CGPoint) -> CGFloat {
+            (line.to.x - line.from.x) * (point.y - line.from.y)
+                - (line.to.y - line.from.y) * (point.x - line.from.x)
+        }
+
+        return side(other.from) * side(other.to) < 0
     }
 
     /// The pen has been put down for long enough to read the page.
@@ -2251,7 +2459,14 @@ struct ContentView: View {
         // Registered first so it runs last: anything waiting on this check is
         // let go only once `isChecking` is back down, or it would find the way
         // still blocked and settle in to wait all over again.
-        defer { freeToCheck() }
+        defer {
+            // Not when the student is the one who called it off. They are
+            // still writing, and starting the same check again the instant
+            // this one is torn down walks straight back into the reason it
+            // was torn down. The pen settling will ask for a fresh one.
+            if !Task.isCancelled { freeToCheck() }
+        }
+
         defer {
             isChecking = false
             writingQuietly = false
@@ -2270,9 +2485,9 @@ struct ContentView: View {
         }
 
         errorLine = nil
-        solvedLine = nil
+        solvedLines = []
         errorInk = nil
-        solvedInk = nil
+        solvedInks = []
         hideFeedback()
 
         let lines = canvas.workingLines(pageWidth: pageWidth)
@@ -2289,32 +2504,16 @@ struct ContentView: View {
                 rows,
                 problemText: question,
                 style: voice.rawValue,
-                history: record.chart.forTheTutor
+                history: record.chart.forTheTutor,
+                answered: answeredQuestions
             )
 
             if Task.isCancelled { return }
 
-            let skipped = result.ignored ?? []
             lastRead = result.recognized ?? []
-
-            if !skipped.isEmpty {
-                show(Feedback(text: "Skipped some writing.", tone: .plain, skipped: skipped))
-            }
 
             // Tutor notes stay on the page across rechecks. New feedback is
             // appended beside the work it refers to.
-
-            // Anything starred on the page was a question, and the server has
-            // already answered it. Said first, because it is the thing they
-            // stopped to ask, and the verdict on the algebra can wait a line.
-            for asked in result.questions ?? [] {
-                tutorWrites(
-                    [asked.answer.lowercased()],
-                    kind: .lesson,
-                    nearLine: lines.last?.lineNumber,
-                    beside: lines.last?.bounds
-                )
-            }
 
             // Something they stopped and asked outright, which comes first.
             // Answered and then marked in the same breath, the reply ends up
@@ -2336,8 +2535,10 @@ struct ContentView: View {
                 declinedHelpFor = nil
 
                 let readAnyAlgebra = !(result.recognized ?? []).isEmpty
-                let near = lines.last?.lineNumber
-                let ink = lines.last?.bounds
+
+                let latest = lineJustWritten()
+                let near = latest?.lineNumber ?? lines.last?.lineNumber
+                let ink = latest?.bounds ?? lines.last?.bounds
 
                 if !readAnyAlgebra {
                     // No algebra on the page yet. Worth saying if they tapped
@@ -2353,20 +2554,25 @@ struct ContentView: View {
                     // are often different: a note in the margin, or the "yes"
                     // that asked for help, is written after the answer and
                     // would otherwise collect the tick.
-                    var answered = lines.last
+                    //
+                    // Every row the answer was written across, not just the
+                    // last of them. Two roots written on two lines are two
+                    // right answers, and only one of them getting a ring
+                    // around it reads as the other having been missed.
+                    let rows = (result.answerSteps ?? [])
+                        .filter { $0 >= 1 && $0 <= lines.count }
+                        .map { lines[$0 - 1] }
 
-                    if let row = result.answerSteps?.last, row >= 1, row <= lines.count {
-                        answered = lines[row - 1]
-                    }
+                    let answered = rows.isEmpty ? [lines.last].compactMap { $0 } : rows
 
-                    solvedLine = answered?.lineNumber
-                    solvedInk = answered?.bounds
+                    solvedLines = answered.map(\.lineNumber)
+                    solvedInks = answered.map(\.bounds)
                     markSolved()
                     record.update { $0.solvedOne() }
                     tutorWrites(
-                        ["solved. \(result.answer ?? "")".lowercased()],
-                        nearLine: answered?.lineNumber,
-                        beside: answered?.bounds
+                        [solvedNote(result.answer)],
+                        nearLine: answered.last?.lineNumber,
+                        beside: answered.last?.bounds
                     )
                 } else {
                     tutorWrites([(result.message ?? "correct so far. keep going.").lowercased()], nearLine: near, beside: ink)
@@ -2406,10 +2612,10 @@ struct ContentView: View {
                         says.append("it's the line with the cross beside it, further up.")
                     }
 
-                    if result.help != nil {
-                        says.append("want a hand?")
-                    }
-
+                    // The offer is a card with Yes and No on it, so writing
+                    // "want a hand?" out in pen underneath asked the same
+                    // question twice in two places a second apart, and the
+                    // written one had no buttons on it to answer with.
                     tutorWrites(says, nearLine: near, beside: errorInk)
 
                     if let help = result.help {
@@ -2424,6 +2630,41 @@ struct ContentView: View {
                     // belonged to and answers for a mistake since fixed.
                     stopListening()
                 }
+            }
+
+            // Anything starred on the page was a question, and the server has
+            // already answered it. Written after the verdict rather than
+            // before it so that the short line gets first pick of the paper.
+            // A lesson runs to several lines and takes the full width to do
+            // it, which left "solved!" hunting for clear paper underneath the
+            // whole thing: a page and a half away from the tick it belongs to.
+            for asked in result.questions ?? [] {
+                // On the line under the question, which is where a reply to it
+                // reads as a reply. Anchored to the foot of the page instead,
+                // an answer to something asked halfway up arrives under
+                // everything written since and no longer answers anything.
+                //
+                // The line below rather than the space beside: an answer runs
+                // to a few lines, and starting it in whatever gap is left at
+                // the end of the question means asking for that many clear
+                // lines from the question's own row down. The question's row is
+                // not clear, so the search walked past it, and past every
+                // annotation under it, and put the answer far enough down the
+                // page to have lost the thread.
+                let onRow = asked.row
+                    .flatMap { $0 >= 1 && $0 <= lines.count ? lines[$0 - 1] : nil }
+
+                tutorWrites(
+                    [asked.answer.lowercased()],
+                    kind: .lesson,
+                    nearLine: onRow.map { $0.lineNumber + 1 } ?? lines.last?.lineNumber,
+                    beside: onRow == nil ? lines.last?.bounds : nil
+                )
+
+                // Written down so the server can skip it next time. The ink
+                // that asked it is still on the page and will be read again on
+                // every check from here on.
+                answeredQuestions.append(asked.asked)
             }
 
             keep()

@@ -24,6 +24,7 @@ from checker.handwriting import (
     BALLOT_CROSSES,
     as_written,
     build_request_body,
+    rows_stacked_in,
     undecorate,
     without_noise,
 )
@@ -305,6 +306,18 @@ def test_second_attempt_is_the_one_that_counts():
     check("second attempt: the later one is read", result["attempt_read"] == 2, result)
 
 
+def test_a_restart_without_the_question_line_first():
+    # The wrong first go was a single line, straight to an answer, with no
+    # question written above it. Copying the question out to start again is
+    # still what marks the fresh attempt, and the page is solved.
+    result = check_page_with_problem("x + 4 = 11", ["x = 11", "x + 4 = 11", "x = 7"])
+
+    check("restart: page is solved", result["ok"] and result["solved"], result)
+    check("restart: answer read off", result["answer"] == "x = 7", result)
+    check("restart: both runs seen", result["attempts"] == 2, result)
+    check("restart: the later one is read", result["attempt_read"] == 2, result)
+
+
 def test_solving_it_then_writing_on_does_not_undo_it():
     result = check_page_with_problem(
         "2x + 5 = 13",
@@ -464,9 +477,13 @@ def test_algebra_is_read_against_a_narrow_alphabet():
     grammar = algebra["configuration"]["math"].get("customGrammarContent", "")
 
     check("alphabet: algebra is narrowed", grammar == ALGEBRA_GRAMMAR, grammar[:40])
-    for stray in ("z", "w", "q"):
+
+    # y is out along with the rest. A 4 written with an open top is a y, and the
+    # reader was taking it as one, so a question written out again lower down
+    # came back as a different equation and the fresh attempt went unnoticed.
+    for stray in ("z", "w", "q", "y"):
         check(f"alphabet: no {stray}", f" {stray} " not in grammar, grammar)
-    for needed in ("x", "y", "=", "-", "7"):
+    for needed in ("x", "=", "-", "7"):
         check(f"alphabet: keeps {needed}", f" {needed} " in grammar, grammar)
 
     # The solver must still be off, or we would be shown the tidy answer
@@ -567,6 +584,58 @@ def test_the_answer_says_which_line_it_was_on():
     check("answer line: counted down the whole page", result.get("answer_steps") == [5])
 
 
+def test_a_restart_written_under_its_own_jotting():
+    # The question written out again to start afresh, with "- 4  - 4" tucked
+    # under it the way anybody would. Close enough together, MyScript hands the
+    # pair back as a matrix rather than as two lines.
+    stacked = "\\begin{matrix} x ^{2} + 4 = 20 \\\\ - 4 - 4 \\end{matrix}"
+
+    check(
+        "stacked: taken apart",
+        rows_stacked_in(stacked) == ["x ^{2} + 4 = 20", "- 4 - 4"],
+        rows_stacked_in(stacked),
+    )
+
+    # Left whole it is neither an equation nor an annotation, so the restated
+    # question restates nothing, the fresh attempt never opens, and the page
+    # goes on being marked against the mistake at the top of it.
+    steps = [as_written(step) for step in steps_written_on(stacked)]
+    check("stacked: the question is back", "x^2 + 4 = 20" in steps, steps)
+
+    # An ordinary line is not a stack and must come through untouched.
+    check("stacked: plain line kept", rows_stacked_in("x = 4") == ["x = 4"])
+
+    # The whole page it came off, marked the way the app marks it.
+    question = parse_equation("x**2 + 4 = 20")
+    rows = [
+        "+ 4 + 4",
+        "x ^{2} = 24",
+        stacked,
+        "x ^{2} = 16",
+        "x = 4",
+        "x = - 4",
+    ]
+
+    equations = []
+    written = []
+
+    for row in rows:
+        for step in steps_written_on(row):
+            try:
+                equation = parse_latex_equation(step)
+            except Exception:
+                continue
+
+            equations.append(equation)
+            written.append(as_written(step))
+
+    result = check_page(equations, written, question)
+
+    check("stacked page: solved", result["ok"] and result["solved"], result)
+    check("stacked page: both runs seen", result["attempts"] == 2, result)
+    check("stacked page: the later one is read", result["attempt_read"] == 2, result)
+
+
 def test_a_photo_question_has_to_be_solvable():
     # Nothing goes onto the student's page unless we could mark it. A model
     # reading a blurred worksheet will hand back headings and fragments along
@@ -631,6 +700,7 @@ if __name__ == "__main__":
     test_two_unknowns_wrong()
     test_something_solve_struggles_with()
     test_second_attempt_is_the_one_that_counts()
+    test_a_restart_without_the_question_line_first()
     test_solving_it_then_writing_on_does_not_undo_it()
     test_two_bad_attempts_report_the_later_one()
     test_one_attempt_behaves_as_before()
@@ -648,6 +718,7 @@ if __name__ == "__main__":
     test_losing_a_root_is_not_described_as_fewer_answers()
     test_a_number_before_a_word_keeps_its_space()
     test_the_answer_says_which_line_it_was_on()
+    test_a_restart_written_under_its_own_jotting()
     test_a_photo_question_has_to_be_solvable()
     test_a_question_has_to_be_marked_as_one()
 

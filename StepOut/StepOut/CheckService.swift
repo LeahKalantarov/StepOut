@@ -56,6 +56,10 @@ struct HandwritingRequest: Codable {
 
     // What the tutor knows about them from before today.
     var history: [String]? = nil
+
+    // Questions on this page that have already been answered once, so the
+    // server can pass over ink it has read before.
+    var answered: [String]? = nil
 }
 
 struct PhotoRequest: Codable {
@@ -153,7 +157,8 @@ func checkHandwriting(
     _ rows: [RowData],
     problemText: String?,
     style: String,
-    history: [String]
+    history: [String],
+    answered: [String]
 ) async throws -> CheckResult {
     try await post(
         path: "/check-handwriting",
@@ -161,7 +166,8 @@ func checkHandwriting(
             rows: rows,
             problemText: problemText,
             style: style,
-            history: history
+            history: history,
+            answered: answered
         )
     )
 }

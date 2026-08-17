@@ -44,6 +44,11 @@ struct CheckResult: Codable {
 struct AnsweredQuestion: Codable {
     let asked: String
     let answer: String
+
+    /// The row the question was written on, counted from 1, so the answer can
+    /// go beside it. Without it the answer lands at the foot of the page,
+    /// which on a page of working is a long way from what was asked.
+    let row: Int?
 }
 
 /// One mistake, described well enough to teach the idea behind it.

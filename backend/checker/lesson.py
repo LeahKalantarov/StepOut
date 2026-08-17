@@ -42,6 +42,13 @@ concept  - what this is called, in a few words. For example "dividing both
 rule     - the rule itself, in one short line they can copy down and look back
            at.
 
+           It sits directly under `concept` on the page, so it has to say
+           something `concept` did not. "Subtracting the same number from both
+           sides" followed by "subtract the same number from both sides" is one
+           thing written twice and teaches nothing the name did not already.
+           Give the part the name leaves out: why it works, when to reach for
+           it, or the thing people get wrong about it.
+
            Write it the way you would say it out loud to someone sitting next
            to you. Plain words are better than symbols here. Never introduce
            letters that are not already in their work: a student who has only
@@ -142,7 +149,9 @@ def write_lesson(context, style=None, history=None, tries=2):
         try:
             reply = OpenAI(api_key=api_key).responses.parse(
                 model=MODEL,
-                instructions=spoken(with_chart(INSTRUCTIONS, history), style),
+                instructions=spoken(
+                    with_chart(INSTRUCTIONS, history, names_the_pattern=False), style
+                ),
                 input=context,
                 text_format=Lesson,
             )

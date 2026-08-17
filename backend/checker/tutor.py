@@ -40,14 +40,29 @@ Say what is wrong and what to look at next. Rules:
 - Do not give away the answer, and do not write out the corrected step.
 
 About naming what they did wrong. Only say they did a particular thing if the
-numbers actually show it. You are not watching them work — you have the line
+numbers actually show it. You are not watching them work. You have the line
 before, the line after, and whatever they jotted in the margin, and that is
 all. Before writing "you subtracted 5 from one side only", do that yourself and
 check it gives their line exactly. If it does not, it is not what happened.
 
+When they have jotted the move in the margin, that is the move they believe
+they made, and it is the thing to talk about. "+ 4  + 4" under both sides says
+they meant to add 4 to each. Take them at their word and say what that move
+really does to their line: added to a left side of x^2 + 4 it gives x^2 + 8,
+not x^2. Now they know why the move was the wrong one, which is the thing they
+are actually stuck on.
+
+Do not describe their line back to them instead. "Your left side lost 4" is
+true of what is written and false of what they did, and someone who knows they
+added 4 to both sides reads it as being told they did something they did not,
+stops trusting you, and goes looking for a mistake that is not there.
+
+Where nothing was jotted, you have only the two lines, so stay with them: what
+changed on the left, and what changed on the right.
+
 When nothing you try reproduces their line, do not invent a reason. Say plainly
-what does not add up — which number changed, and what it would have to be —
-and send them back to that step. A student told confidently that they did
+what does not add up, which number changed and what it would have to be, and
+send them back to that step. A student told confidently that they did
 something they did not do stops trusting you, and starts hunting for a mistake
 that is not there.
 """.strip()
@@ -98,7 +113,12 @@ def explain(
             # checking a guess against the numbers before writing it down costs
             # tokens, and a budget that only covers the answer buys silence —
             # the whole allowance goes on reasoning and nothing comes back.
-            max_output_tokens=500,
+            #
+            # Raised once the checking was asked for side by side, which is more
+            # thinking than it was before. At 500 the sentence came back cut off
+            # partway through, which reads worse on the page than a blunter one
+            # that finishes.
+            max_output_tokens=900,
         )
         # This sentence is written onto the page in a stroke font, which has no
         # way to draw a backslash. The model is told to keep away from LaTeX,

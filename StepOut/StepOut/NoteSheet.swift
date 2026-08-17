@@ -55,10 +55,14 @@ struct NoteCard: Identifiable, Codable {
         /// Whether the box wants the full width of the sheet.
         ///
         /// A worked example is a column of steps that have to line up under
-        /// one another, and a graph needs room to be square-ish. Squeezed into
-        /// half a page both stop being readable.
+        /// one another, and squeezed into half a page it stops being readable.
+        ///
+        /// A graph is not on this list, though it used to be. Given the whole
+        /// width it came out the size of a poster, and a topic like
+        /// transformations wants three small curves next to each other far
+        /// more than it wants one enormous one.
         var isWide: Bool {
-            self == .example || self == .graph
+            self == .example
         }
     }
 

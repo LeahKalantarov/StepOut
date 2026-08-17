@@ -51,11 +51,18 @@ def sign_request(body_text, application_key, hmac_key):
 # is a genuinely hard problem and this will not fix it, but a 2 misread as a z
 # stops being possible at all.
 #
-# Letters are limited to x and y. Anything a student writes in words belongs on
-# a row that fails to parse as algebra, and those rows are re-read as text with
-# the whole alphabet available.
+# The only letter is x, and dropping y from it was worth more than it sounds. A
+# handwritten 4 with an open top is a y, and the reader was taking it as one:
+# "x + 4 = 11" written out again halfway down the page came back as
+# "x + y = 11", which is not the question restated, so the fresh attempt was
+# never recognised as one and a correct second go stayed buried under the first
+# wrong one. Every question this app sets is in x, so y bought nothing and cost
+# that.
+#
+# Anything a student writes in words belongs on a row that fails to parse as
+# algebra, and those rows are re-read as text with the whole alphabet available.
 ALGEBRA_GRAMMAR = """
-symbol = 0 1 2 3 4 5 6 7 8 9 x y + - = / . < >
+symbol = 0 1 2 3 4 5 6 7 8 9 x + - = / . < >
 leftpar = (
 rightpar = )
 character ::= identity(symbol)
@@ -191,6 +198,49 @@ def without_arrows(latex_text):
     page with working all over it is reported as having nothing on it.
     """
     return re.sub(r"\s+", " ", ARROWS.sub(" ", latex_text)).strip()
+
+
+# The environments MyScript reaches for when writing sits one line above
+# another. The column spec after \begin{array} is optional and thrown away with
+# the rest of the wrapper.
+STACKS = r"(?:matrix|array|aligned|gathered|cases|split|[pbvBV]matrix)"
+
+STACKED = re.compile(
+    r"\\begin\{" + STACKS + r"\}(?:\{[^}]*\})?(.*?)\\end\{" + STACKS + r"\}",
+    re.DOTALL,
+)
+
+# What separates one row of such an environment from the next.
+STACK_BREAK = re.compile(r"\\\\")
+
+
+def rows_stacked_in(latex_text):
+    """
+    Read a stack of writing as the separate lines it is.
+
+    Two things written close together, one under the other, are sometimes
+    returned as two rows of a matrix rather than as two lines. Restating the
+    question and jotting "- 4  - 4" beneath it does it every time, and comes
+    back as
+
+        \\begin{matrix} x^2 + 4 = 20 \\\\ - 4 - 4 \\end{matrix}
+
+    That is nobody's idea of a matrix. It parses as neither an equation nor an
+    annotation, so the restated question is not recognised as restating
+    anything, the fresh attempt it opens is never opened, and the page is still
+    being marked against the mistake made at the top of it. Which is the exact
+    opposite of what writing the question out again was for.
+
+    Returns a list, usually of one, so an ordinary line passes through as it is.
+    """
+    unwrapped = STACKED.sub(lambda found: found.group(1), latex_text)
+
+    if unwrapped == latex_text:
+        return [latex_text]
+
+    rows = [row.strip() for row in STACK_BREAK.split(unwrapped)]
+
+    return [row for row in rows if row] or [latex_text]
 
 
 # Marks the recognizer draws over a symbol. A pen stroke that strays above the

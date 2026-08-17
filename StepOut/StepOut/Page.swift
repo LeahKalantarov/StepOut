@@ -58,6 +58,13 @@ struct PageWork: Codable {
     var offsets: [UUID: CGSize] = [:]
     var scales: [UUID: CGFloat] = [:]
 
+    /// Questions asked on this page that have already been answered.
+    ///
+    /// Optional so that work saved before this existed still reads back. A
+    /// page put down mid-question and picked up tomorrow would otherwise have
+    /// its question answered a second time on the first check.
+    var answered: [String]?
+
     var strokes: PKDrawing {
         (try? PKDrawing(data: drawing)) ?? PKDrawing()
     }

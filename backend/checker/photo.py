@@ -34,6 +34,7 @@ from sympy import solve
 from checker.graphs import plot
 from checker.handwriting import as_written
 from checker.parser import parse_equation, plain_symbols
+from checker.voice import PUNCTUATION
 
 load_dotenv()
 
@@ -44,7 +45,7 @@ MODEL = "gpt-5.6-luna"
 # Bigger than it used to be. Notes were written out stroke by stroke in front of
 # the student, so twelve lines was already a minute of watching; a laid-out
 # sheet arrives at once, and can afford to be a sheet.
-MOST_CARDS = 9
+MOST_CARDS = 12
 MOST_LINES = 6
 MOST_QUESTIONS = 8
 
@@ -69,8 +70,11 @@ Answer with a sheet of notes and a list of questions. Either may be empty; be
 led by what they asked for.
 
 The sheet is a revision sheet: a title, and boxes. Give it a title naming the
-topic, like "Quadratic Equations". Then at most nine boxes, each with a short
+topic, like "Quadratic Equations". Then at most twelve boxes, each with a short
 heading, a kind, and at most six lines.
+
+The sheet scrolls, so it is not limited to what fits on one screen. A topic
+that genuinely needs a dozen boxes should have a dozen.
 
 The kinds, and what belongs in each:
 
@@ -83,19 +87,33 @@ example    - one worked case, a line per step, ending at the answer. Pick a
 keypoints  - the things that are true and worth knowing, that fit nowhere else.
 tip        - one thing they will get wrong if nobody says it. At most one box
              of these per sheet, and only when there is a real trap.
-graph      - a curve worth seeing, drawn properly with its roots marked.
+graph      - one curve, drawn properly with its roots marked. Each one is
+             drawn small, so several of them side by side is the normal way to
+             use these rather than the exception.
 
              Put the function in `graph` on its own, with no "y =" in front:
              x**2 - 4x + 3, not y = x**2 - 4x + 3. One unknown only, and a
-             function rather than an equation — nothing with an equals sign.
+             function rather than an equation, nothing with an equals sign.
              Add a line or two saying what to look at.
 
-             Include one whenever the topic has a shape to it. Anything about
+             Draw one whenever the topic has a shape to it. Anything about
              quadratics, parabolas, roots, the discriminant, lines, gradients,
              or where a graph cuts an axis is better with the picture than
              without it, and a student revising from this sheet will look at
              the curve before they read a word of it. Pick a case that shows
              the point being made: for roots, one that plainly crosses twice.
+
+             Draw several when the topic is about how a shape changes.
+             Transformations, shifts, stretches and reflections are the clear
+             case: give the plain curve a box of its own and then one box for
+             each change, so the student can hold them side by side. x**2,
+             then x**2 + 2, then (x - 3)**2, then -(x - 2)**2 + 3 teaches more
+             than any sentence about it, and the heading on each box should
+             name the change rather than repeat the function.
+
+             Every graph has to earn its box by showing the thing that box is
+             about. Never draw one to fill the sheet out, and never draw the
+             same curve twice.
 
 How to write a box:
 
@@ -106,8 +124,9 @@ How to write a box:
   symbol they have to decode.
 - Do not repeat yourself between boxes. Each earns its place.
 
-Prefer four good boxes to nine thin ones. A sheet is for looking things up
-later, not for proving the page was read.
+Prefer four good boxes to twelve thin ones. A sheet is for looking things up
+later, not for proving the page was read. Length is worth having only when
+every box in it is worth reading.
 
 questions - equations for them to solve. Copy them off the page when the page
             is a worksheet. Set fresh ones when the page is notes and they want
@@ -126,7 +145,9 @@ How to write the maths:
 - Multiplication can be implied: 2x, not 2*x.
 - Divide with a slash: x/2.
 - Every question is one equation with exactly one equals sign and exactly one
-  unknown to solve for. Nothing that is not an equation belongs in `questions`.
+  unknown to solve for, and that unknown is always called x. If the sheet names
+  it something else, rename it to x when you write the question out. Nothing
+  that is not an equation belongs in `questions`.
 
 If the picture is too blurred or dark to read with confidence, answer with an
 empty sheet and no questions. Guessing at a question is worse than admitting
@@ -198,7 +219,7 @@ def read_page(image_base64, instruction=None):
     try:
         reply = OpenAI(api_key=api_key).responses.parse(
             model=MODEL,
-            instructions=INSTRUCTIONS,
+            instructions=f"{INSTRUCTIONS}\n\n{PUNCTUATION}",
             input=[
                 {
                     "role": "user",
