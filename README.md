@@ -16,12 +16,20 @@ beside your working.
   notes — and asks what you want done with it. Copy the questions out, explain
   the page, or set fresh practice on what it covers. You answer in handwriting
   or typed, whichever is nearer.
+- **Writes revision sheets** from what the photo covered: a title and boxes of
+  definitions, worked examples and traps, with curves plotted and their roots
+  marked where the topic has a shape to it.
 - **Marks your working line by line**, in your own handwriting, and rings the
   step that went wrong.
 - **Offers help in writing.** It asks "want a hand?" on the page; you write
   "yes" (or "yeah", or a tick) and it teaches the concept with a worked example.
 - **Answers questions you write down.** Mark a line with a `*` or a `?` and it
   replies underneath.
+- **Remembers what keeps catching you out.** A short record of previous
+  sessions goes back to the tutor, so it can say "this is the same step as last
+  time" and skip re-teaching an idea you have already had.
+- **Speaks the way you want to be spoken to** — encouraging, direct, or
+  thorough, picked in settings and carried through everything it writes.
 - **Follows how people actually write** — crooked lines, arrows between steps,
   crossings-out, a second attempt in the space to the right.
 
@@ -38,6 +46,14 @@ Apple Pencil strokes
    → an LLM, which explains a wrong step     (checker/tutor.py, lesson.py)
    → written back onto the page by hand      (StrokeFont.swift)
 ```
+
+A photographed page takes a second route — read by a vision model into a sheet
+of notes and a set of questions (`checker/photo.py`). Curves on that sheet are
+sampled with SymPy and sent as points with their roots and turning point
+marked (`checker/graphs.py`), so the drawing is the app's rather than an image
+downloaded from the server. Whatever the tutor is about to say passes through
+`checker/voice.py` for tone and `checker/chart.py` for what it already knows
+about this student.
 
 Four decisions did most of the work:
 
@@ -120,10 +136,20 @@ app no longer needs the Mac.
 ### Tests
 
 ```bash
-cd backend && python test_checker.py
+cd backend
+python test_checker.py    # 159 assertions
+python test_graphs.py     # 22 assertions
 ```
 
-159 assertions over the checker: linear and quadratic working, invented and lost
+`test_checker.py` covers linear and quadratic working, invented and lost
 solutions, identities and contradictions, restarts, mis-copied questions, which
 questions are safe to set from a photo, and turning what the recognizer returns
-into something readable.
+into something readable. `test_graphs.py` covers what is worth drawing and what
+is refused: curves with no real roots, functions that shoot off the top of the
+axes, anything with more than one unknown.
+
+Neither needs a key or a network. They run against the parsing and the checking
+directly, never calling the recognizer or the model, so what is under test is
+the maths rather than anybody's API. `test_handwriting.py` is the exception: it
+sends real strokes to MyScript, so it needs the keys in `.env` and will fail
+without them.
