@@ -11,3 +11,7 @@ xcuserdata/
 *.xcuserstate
 build/
 DerivedData/
+
+# Recording and thumbnail tooling, kept off the repository
+frames.swift
+stepout-youtube-thumbnail.png

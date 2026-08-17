@@ -17,6 +17,8 @@ from openai import OpenAI
 
 from checker.handwriting import as_written
 from checker.parser import plain_symbols
+from checker.chart import recalled, with_chart
+from checker.voice import spoken
 
 load_dotenv()
 
@@ -31,16 +33,29 @@ Answer that question, and only that question.
 - Three short sentences at most. Your answer is written onto their page by
   hand, and a long one fills the paper they still need.
 - Answer what they asked, not the larger thing behind it.
+- The first sentence is the answer. Not a remark on the line above it, not
+  praise for what they have got right so far, not the question repeated back.
+  They put their pen down and asked because they wanted to know something, so
+  the first thing they read should be the thing they wanted to know.
+- When they ask why, give the reason, not the instruction. They already know
+  the step is to subtract seven from both sides. What they are asking is why
+  both sides, and the answer to that is that the two sides are equal and doing
+  the same thing to each keeps them equal.
 - Talk about the idea and the method. Do not solve their problem for them.
-- If the question does not make sense, say so plainly and ask them to write it
-  again. Do not guess at what they meant.
+- If they have only said that they are stuck, or that they do not understand,
+  rather than asking anything in particular, look at the lines they have
+  written and name the one next thing to do. That is a real question and the
+  page in front of you is the answer to it, so never send that student away to
+  write it out again.
+- If a question you cannot make out is genuinely unreadable, say so plainly and
+  ask them to write it again. Do not guess at what they meant.
 - Write maths the way it goes on paper: 2x = 8, x^2. No LaTeX, no backslashes,
   no dollar signs, and never the printed signs for times or divide.
 - Plain lowercase prose, the way you would say it out loud.
 """.strip()
 
 
-def answer(asked, problem=None, work=None):
+def answer(asked, problem=None, work=None, style=None, history=None):
     """
     Answer the question, or return None if we have nothing worth writing.
     """
@@ -57,15 +72,19 @@ def answer(asked, problem=None, work=None):
             f"The problem they are working on: {problem}" if problem else "",
             "What they have written so far:" if work else "",
             *(f"  {line}" for line in work or []),
+            recalled(history),
         ]
     ).strip()
 
     try:
         reply = OpenAI(api_key=api_key).responses.create(
             model=MODEL,
-            instructions=INSTRUCTIONS,
+            instructions=spoken(with_chart(INSTRUCTIONS, history), style),
             input=context,
-            max_output_tokens=200,
+            # Mostly thinking room. A budget sized to the answer alone gets
+            # spent on reasoning before a word is written, and the student's
+            # question comes back unanswered.
+            max_output_tokens=500,
         )
     except Exception:
         return None

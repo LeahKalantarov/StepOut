@@ -21,6 +21,17 @@ final class NotebookCanvas: PKCanvasView {
         becomeFirstResponder()
     }
 
+    /// Never offer the system's editing menu.
+    ///
+    /// Holding a finger on the page means "pick up that piece of the tutor's
+    /// writing" here. Left alone, iPadOS reads the same gesture as text
+    /// editing and puts up Select All / Insert Space over the paper, which is
+    /// both meaningless on a drawing and in the way of the gesture that was
+    /// actually meant.
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        false
+    }
+
     /// Wipe the page in a way undo can put back.
     ///
     /// Assigning to `drawing` directly bypasses the undo history, which would

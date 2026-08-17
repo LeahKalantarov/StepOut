@@ -1,6 +1,8 @@
 import Foundation
 
-// Matches the JSON that backend/main.py sends back.
+// Matches the JSON that backend/main.py sends back, for example:
+// { "ok": true, "solved": true, "answer": "x = 4", "recognized": [...] }
+// { "ok": false, "error_step": 3, "message": "..." }
 struct CheckResult: Codable {
     let ok: Bool
     let errorStep: Int?
@@ -24,15 +26,6 @@ struct CheckResult: Codable {
     // turned into nonsense. Shown so a surprising verdict is explainable.
     let ignored: [String]?
 
-    /// Why the step failed — wrong_answer, wrong_divisor, divided_one_side, …
-    let reason: String?
-
-    /// What the previous line actually implies, e.g. "x = 4"
-    let expectedAnswer: String?
-
-    /// What we think the student wrote for the bad step
-    let studentAnswer: String?
-
     // Everything a lesson about this mistake would need, when the step was
     // wrong. Held onto in case the student asks for help, and handed straight
     // back so nothing has to work out what went wrong a second time.
@@ -40,12 +33,22 @@ struct CheckResult: Codable {
 
     // Anything written on the page and marked as a question, already answered.
     let questions: [AnsweredQuestion]?
+
+    // Which rows the answers were written on, counted from 1. The tick and the
+    // ring go here. Without it the only guess available is the last row on the
+    // page, which is a note in the margin as often as it is the answer.
+    let answerSteps: [Int]?
 }
 
 /// A question the student wrote on their page, and what the tutor said back.
 struct AnsweredQuestion: Codable {
     let asked: String
     let answer: String
+
+    /// The row the question was written on, counted from 1, so the answer can
+    /// go beside it. Without it the answer lands at the foot of the page,
+    /// which on a page of working is a long way from what was asked.
+    let row: Int?
 }
 
 /// One mistake, described well enough to teach the idea behind it.
@@ -61,66 +64,4 @@ struct HelpContext: Codable {
     /// tutor has to guess from two equations, and a dropped answer looks like
     /// sound working until you count the answers.
     let reason: String?
-
-    let expectedAnswer: String?
-    let expectedDivisor: String?
-    let guessedDivisor: String?
-}
-
-struct TutorResponse: Codable {
-    let reply: String
-    let prompt: String?
-    let source: String?
-    let isPushback: Bool?
-}
-
-struct PhotoUploadResponse: Codable {
-    let ok: Bool
-    let photos: [String]?
-}
-
-struct NotesUploadResponse: Codable {
-    let ok: Bool
-    let notes: String?
-}
-
-struct TutorCheckPayload: Codable {
-    let ok: Bool
-    let errorStep: Int?
-    let message: String?
-    let reason: String?
-    let expectedAnswer: String?
-    let studentAnswer: String?
-    let solved: Bool?
-    let answer: String?
-}
-
-/// Turns a CheckResult into the dictionary the tutor endpoint expects.
-extension CheckResult {
-    func asDictionary() -> [String: Any] {
-        var dict: [String: Any] = ["ok": ok]
-
-        if let errorStep { dict["error_step"] = errorStep }
-        if let message { dict["message"] = message }
-        if let reason { dict["reason"] = reason }
-        if let expectedAnswer { dict["expected_answer"] = expectedAnswer }
-        if let studentAnswer { dict["student_answer"] = studentAnswer }
-        if let solved { dict["solved"] = solved }
-        if let answer { dict["answer"] = answer }
-
-        return dict
-    }
-
-    func tutorPayload() -> TutorCheckPayload {
-        TutorCheckPayload(
-            ok: ok,
-            errorStep: errorStep,
-            message: message,
-            reason: reason,
-            expectedAnswer: expectedAnswer,
-            studentAnswer: studentAnswer,
-            solved: solved,
-            answer: answer
-        )
-    }
 }

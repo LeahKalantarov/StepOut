@@ -1,205 +1,333 @@
 """
-Reads a photograph of handwritten working into lines of maths.
+Reads a photograph of a page, and does with it whatever the student asked.
 
-This is the same job MyScript does for Apple Pencil strokes, for the times
-there are no strokes to read: work done on real paper before the app was open,
-a worksheet, a whiteboard, a friend's page.
+The page might be a worksheet of questions to copy down, or it might be a
+revision sheet covered in formulas, in which case copying it down would be
+useless — what is wanted there is the ideas written out and some questions set
+to practise on.
 
-The rule from the rest of the app holds here. The model is asked to *read*,
-never to judge. It transcribes what is on the paper, mistakes and all, and
-SymPy decides whether any of it follows. A reader that quietly corrected
-2x = 8 -> x = 5 into x = 4 would hide the very thing the student needs to see,
-so the instructions below spend most of their words forbidding exactly that.
+So the student says what they want, in their own handwriting or typed, and that
+comes in alongside the picture. Left unsaid, we judge it from the page.
+
+Two things come back. `sheet` is a page of notes, laid out in titled boxes the
+way a good revision sheet is. `questions` are algebra, and algebra is held to
+the rule that holds everywhere else here: every one is parsed before it is
+offered, and anything we could not mark is dropped. A question copied down
+wrongly is worse than one not copied at all — the student would work faithfully
+through a problem that was never set, and be marked against it.
+
+The sheet is structured rather than prose because the model is not allowed to
+design anything. It chooses what to say and which box to file it under; the
+iPad decides what a box of that kind looks like. Left to lay out its own page a
+model produces something different every time, and a set of notes whose formula
+box is somewhere new on every sheet is a set of notes you cannot skim.
 """
 
-import base64
-import binascii
 import os
-import re
+from typing import Literal
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from pydantic import BaseModel
+from sympy import solve
 
+from checker.graphs import plot
 from checker.handwriting import as_written
+from checker.parser import parse_equation, plain_symbols
+from checker.voice import PUNCTUATION
 
 load_dotenv()
 
-# Reading a photograph is harder than writing one sentence about two equations,
-# so this is deliberately not tied to the model the tutor's voice uses.
-MODEL = os.getenv("PHOTO_MODEL", "gpt-5.6-luna")
+MODEL = "gpt-5.6-luna"
 
-WORKING_INSTRUCTIONS = """
-You transcribe photographs of handwritten maths. You are a pair of eyes, not a
-tutor and not a solver.
+# How much of a page one upload can turn into.
+#
+# Bigger than it used to be. Notes were written out stroke by stroke in front of
+# the student, so twelve lines was already a minute of watching; a laid-out
+# sheet arrives at once, and can afford to be a sheet.
+MOST_CARDS = 12
+MOST_LINES = 6
+MOST_QUESTIONS = 8
 
-Write out every line of working you can see, in the order it appears down the
-page, one line per line of output.
+# What a box can be. The model picks one of these and nothing else — no colours,
+# no sizes, no positions. That single word is what the iPad turns into a look.
+KINDS = (
+    "definition",
+    "formula",
+    "method",
+    "example",
+    "keypoints",
+    "tip",
+    "graph",
+)
 
-Rules, in order of importance:
-- Copy what is actually written, including mistakes. If the page says x = 5 and
-  that is wrong, write x = 5. Never correct, never simplify, never solve.
-- Plain maths as it is written on paper: 2x + 5 = 13. No LaTeX, no backslashes,
-  no dollar signs, no markdown.
-- One step per line. No numbering, no bullets, no commentary.
-- Skip anything crossed out, and skip annotations that are not equations, such
-  as "-5" written under both sides.
-- If a character is genuinely unreadable, leave that whole line out rather than
-  guessing at it.
-- If there is no handwritten maths in the photograph at all, output nothing.
+INSTRUCTIONS = """
+You are a patient maths tutor. A student has photographed a page and told you
+what they want done with it. The page might be homework, a textbook, or their
+own revision notes.
+
+Answer with a sheet of notes and a list of questions. Either may be empty; be
+led by what they asked for.
+
+The sheet is a revision sheet: a title, and boxes. Give it a title naming the
+topic, like "Quadratic Equations". Then at most twelve boxes, each with a short
+heading, a kind, and at most six lines.
+
+The sheet scrolls, so it is not limited to what fits on one screen. A topic
+that genuinely needs a dozen boxes should have a dozen.
+
+The kinds, and what belongs in each:
+
+definition - what the thing is. Nearly every sheet wants one, and it goes
+             first, because the rest means nothing without it.
+formula    - a rule worth remembering exactly, written out as it is used.
+method     - how to do it. One step per line, in order.
+example    - one worked case, a line per step, ending at the answer. Pick a
+             case that shows the method rather than the easiest one.
+keypoints  - the things that are true and worth knowing, that fit nowhere else.
+tip        - one thing they will get wrong if nobody says it. At most one box
+             of these per sheet, and only when there is a real trap.
+graph      - one curve, drawn properly with its roots marked. Each one is
+             drawn small, so several of them side by side is the normal way to
+             use these rather than the exception.
+
+             Put the function in `graph` on its own, with no "y =" in front:
+             x**2 - 4x + 3, not y = x**2 - 4x + 3. One unknown only, and a
+             function rather than an equation, nothing with an equals sign.
+             Add a line or two saying what to look at.
+
+             Draw one whenever the topic has a shape to it. Anything about
+             quadratics, parabolas, roots, the discriminant, lines, gradients,
+             or where a graph cuts an axis is better with the picture than
+             without it, and a student revising from this sheet will look at
+             the curve before they read a word of it. Pick a case that shows
+             the point being made: for roots, one that plainly crosses twice.
+
+             Draw several when the topic is about how a shape changes.
+             Transformations, shifts, stretches and reflections are the clear
+             case: give the plain curve a box of its own and then one box for
+             each change, so the student can hold them side by side. x**2,
+             then x**2 + 2, then (x - 3)**2, then -(x - 2)**2 + 3 teaches more
+             than any sentence about it, and the heading on each box should
+             name the change rather than repeat the function.
+
+             Every graph has to earn its box by showing the thing that box is
+             about. Never draw one to fill the sheet out, and never draw the
+             same curve twice.
+
+How to write a box:
+
+- Every line is handwritten onto paper, so keep to about ten words. A line that
+  runs on gets broken across the box and stops looking like a note.
+- One thought per line. Say why a rule holds, not just what it is.
+- Plain words wherever a plain word will do: "square both sides last" beats a
+  symbol they have to decode.
+- Do not repeat yourself between boxes. Each earns its place.
+
+Prefer four good boxes to twelve thin ones. A sheet is for looking things up
+later, not for proving the page was read. Length is worth having only when
+every box in it is worth reading.
+
+questions - equations for them to solve. Copy them off the page when the page
+            is a worksheet. Set fresh ones when the page is notes and they want
+            practice: make them fit what the page covers, and build up from
+            straightforward to harder. At most eight.
+
+            Leave empty if they only asked to have the page explained.
+
+If they did not say what they wanted: a page of questions gets copied into
+`questions`, and a page of notes or formulas becomes a sheet with a few
+questions set to practise on.
+
+How to write the maths:
+- Plain text, no LaTeX, no backslashes, no dollar signs.
+- Powers use two stars: x**2.
+- Multiplication can be implied: 2x, not 2*x.
+- Divide with a slash: x/2.
+- Every question is one equation with exactly one equals sign and exactly one
+  unknown to solve for, and that unknown is always called x. If the sheet names
+  it something else, rename it to x when you write the question out. Nothing
+  that is not an equation belongs in `questions`.
+
+If the picture is too blurred or dark to read with confidence, answer with an
+empty sheet and no questions. Guessing at a question is worse than admitting
+you cannot read it.
 """.strip()
 
-ASSIGNMENT_INSTRUCTIONS = """
-You transcribe photographs of maths worksheets and assignments. You are a pair
-of eyes, not a tutor and not a solver.
 
-Write out the questions the student has been asked to solve, one per line, in
-the order they appear.
+class Card(BaseModel):
+    heading: str
+    kind: Literal[KINDS]
+    lines: list[str]
 
-Rules, in order of importance:
-- Only the questions. If someone has started working on them, ignore the
-  working and write out the question it started from.
-- Never solve anything. "3x = 21" stays "3x = 21". Never write the answer.
-- Just the equation, with the wording around it dropped. "1. Solve for x:
-  3x = 21" becomes "3x = 21".
-- Plain maths as it is written on paper. No LaTeX, no backslashes, no dollar
-  signs, no markdown.
-- Skip anything that is not an equation to solve: headings, names, dates,
-  instructions, page numbers.
-- If a question is unreadable, leave it out rather than guessing at it.
-- If there are no questions in the photograph at all, output nothing.
-""".strip()
-
-# A line of transcription we can use has a variable in it or an equals sign.
-# Anything else is the model talking to us despite being asked not to.
-LOOKS_LIKE_MATHS = re.compile(r"[=<>]")
-
-# Numbering the model was told not to add, but sometimes does anyway:
-# "1.", "2)", "step 3:", "- ".
-LEADING_LABEL = re.compile(r"^\s*(?:step\s*)?\d+\s*[.):]\s*|^\s*[-*•]\s*", re.IGNORECASE)
+    # A function of one unknown to draw, on a graph card. Everything about the
+    # curve — where it goes, where it crosses, where it turns — is worked out
+    # from this by SymPy rather than taken from the model.
+    graph: str | None = None
 
 
-def tidy_lines(text):
+class PageReading(BaseModel):
+    title: str
+    cards: list[Card]
+    questions: list[str]
+
+
+def trouble_with(error):
     """
-    Turn whatever the model replied with into clean lines of maths.
+    Say what went wrong in a way that tells the student what to do about it.
 
-    Kept apart from the request itself so it can be tested without a network
-    or a key, which matters because this is where the surprises live: fenced
-    code blocks, numbering, and the occasional sentence of commentary.
+    An empty page has two quite different causes, and they ask for opposite
+    things. A photograph of a blurred desk means take another one. A server
+    that could not be reached means no photograph will ever help, and taking
+    six more is a waste of somebody's evening.
     """
-    lines = []
+    name = type(error).__name__
 
-    for raw in (text or "").splitlines():
-        line = raw.strip()
+    if name in ("APIConnectionError", "APITimeoutError"):
+        return "Couldn't reach the tutor. Check the Mac is online, then try again."
 
-        # Markdown fences around the answer, which no instruction reliably stops.
-        if line.startswith("```"):
-            continue
+    if name == "RateLimitError":
+        return "The tutor is busy right now. Try that again in a moment."
 
-        line = LEADING_LABEL.sub("", line).strip()
+    if name in ("AuthenticationError", "PermissionDeniedError"):
+        return "The server's OpenAI key was refused."
 
-        if not line:
-            continue
-
-        # Written the way the page is written, in case a backslash slipped in.
-        line = as_written(line).strip()
-
-        if not line or not LOOKS_LIKE_MATHS.search(line):
-            continue
-
-        lines.append(line)
-
-    return lines
+    return "Something went wrong reading that photo."
 
 
-def looks_like_an_image(image_base64):
+def read_page(image_base64, instruction=None):
     """
-    Whether this is base64 we can hand to the model.
+    Read the page, and return what to write on it and what to set.
 
-    Checked here rather than at the endpoint so a truncated upload fails with
-    something a person can act on, instead of a billing line and a shrug.
-    """
-    if not image_base64:
-        return False
-
-    try:
-        base64.b64decode(image_base64, validate=True)
-    except (binascii.Error, ValueError):
-        return False
-
-    return True
-
-
-def read_lines(image_base64, instructions, asking, media_type="image/jpeg"):
-    """
-    Show the photograph to the model, and tidy whatever it says back.
-
-    Returns an empty list when there is no API key, when the photograph holds
-    nothing to read, or when the request fails. The caller treats all three the
-    same way — as a picture it could not read — because from the student's side
-    they are the same thing, and a photograph nobody can read is not an error
-    worth a stack trace.
+    Never raises. A photograph that cannot be read is an ordinary outcome, and
+    the app treats empty lists as "nothing came of that one" — but `trouble`
+    carries the reason when the emptiness was this end's fault rather than the
+    photograph's.
     """
     api_key = os.getenv("OPENAI_API_KEY")
 
     if not api_key:
-        print("photo: no OPENAI_API_KEY set, so there is nothing to read it with")
-        return []
+        print("photo: no OPENAI_API_KEY set")
+        return {
+            "sheet": None,
+            "questions": [],
+            "trouble": "The server has no OpenAI key set.",
+        }
 
-    if not looks_like_an_image(image_base64):
-        print("photo: the upload was not usable base64")
-        return []
+    asked = (instruction or "").strip()
 
     try:
-        reply = OpenAI(api_key=api_key).responses.create(
+        reply = OpenAI(api_key=api_key).responses.parse(
             model=MODEL,
-            instructions=instructions,
+            instructions=f"{INSTRUCTIONS}\n\n{PUNCTUATION}",
             input=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "input_text", "text": asking},
+                        {
+                            "type": "input_text",
+                            "text": (
+                                f"They asked: {asked}"
+                                if asked
+                                else "They did not say what they wanted."
+                            ),
+                        },
                         {
                             "type": "input_image",
-                            "image_url": f"data:{media_type};base64,{image_base64}",
+                            "image_url": f"data:image/jpeg;base64,{image_base64}",
                         },
                     ],
                 }
             ],
-            max_output_tokens=600,
+            text_format=PageReading,
         )
+        reading = reply.output_parsed
     except Exception as error:
-        # Said out loud rather than swallowed. The likeliest cause is a model
-        # that cannot see images, and that is a one-line fix in .env — but only
-        # if you can tell it apart from a photograph of an empty page.
-        print(f"photo: {MODEL} could not read it: {error}")
-        return []
+        print(f"photo: could not be read ({type(error).__name__}: {error})")
+        return {"sheet": None, "questions": [], "trouble": trouble_with(error)}
 
-    return tidy_lines(reply.output_text)
+    if reading is None:
+        return {"sheet": None, "questions": [], "trouble": None}
+
+    # Told to keep it short, a model still sometimes empties the whole page
+    # onto the student. A sheet is for looking things up later, and one with
+    # forty boxes is one nobody looks anything up in.
+    cards = [
+        drawn for card in reading.cards[:MOST_CARDS] if (drawn := for_sheet(card))
+    ]
+
+    return {
+        "sheet": {"title": for_page(reading.title), "cards": cards} if cards else None,
+        # `**` is what the checker reads, but not what a page says. The question
+        # is written onto the paper by hand, and a caret is what the stroke font
+        # raises — and what the built-in questions already use.
+        "questions": [
+            question.replace("**", "^")
+            for question in reading.questions[:MOST_QUESTIONS]
+            if solvable(question)
+        ],
+        # The photograph was read. Anything empty about what came back is the
+        # page's own doing, and the app already has words for that.
+        "trouble": None,
+    }
 
 
-def read_photo(image_base64, media_type="image/jpeg"):
+def for_page(note):
+    """A line of notes, with anything the page cannot draw taken back out."""
+    return as_written(plain_symbols(note).replace("**", "^")).strip()
+
+
+def for_sheet(card):
     """
-    Read a photograph of someone's working, line by line.
+    One box, ready to be drawn, or None if there is nothing left in it.
+
+    A graph is worked out here rather than trusted: the model names a function
+    and SymPy decides everything about the curve. A function that cannot be
+    drawn honestly costs the graph, not the box — the lines beside it still say
+    something worth reading.
     """
-    return read_lines(
-        image_base64,
-        WORKING_INSTRUCTIONS,
-        "Transcribe the handwritten maths in this photograph.",
-        media_type,
-    )
+    lines = [
+        written for line in card.lines[:MOST_LINES] if (written := for_page(line))
+    ]
+
+    graph = plot(card.graph) if card.graph else None
+
+    # A graph card whose graph did not survive is a heading over nothing.
+    if not lines and not graph:
+        return None
+
+    return {
+        "heading": for_page(card.heading),
+        "kind": card.kind,
+        "lines": lines,
+        "graph": graph,
+    }
 
 
-def read_assignment(image_base64, media_type="image/jpeg"):
+def solvable(question):
     """
-    Read a photograph of a worksheet, and return the questions on it.
+    Whether this is something the student could actually be set, and we could
+    actually mark.
+    """
+    try:
+        equation = parse_equation(question)
+    except Exception:
+        return False
 
-    The questions only, never the answers. A sheet somebody has already started
-    is the normal case, and the point is to be given the same questions they
-    were given, not their attempt at them.
-    """
-    return read_lines(
-        image_base64,
-        ASSIGNMENT_INSTRUCTIONS,
-        "List the equations this worksheet asks the student to solve.",
-        media_type,
-    )
+    # Exactly one unknown. No unknowns is a statement of fact rather than a
+    # question, and two describes a line rather than an answer — neither is
+    # something this app knows how to walk a student through.
+    if len(equation.free_symbols) != 1:
+        return False
+
+    # And an answer they could write down. Asked for practice on the
+    # discriminant, a model will dutifully set one with a negative one to show
+    # what that looks like — but the honest answer there is "no real
+    # solutions", which is a sentence, not a line of algebra. There is nothing
+    # the student could write that this app would mark as finishing it.
+    try:
+        answers = solve(equation)
+    except Exception:
+        return False
+
+    return bool(answers) and all(answer.is_real for answer in answers)

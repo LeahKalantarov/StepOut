@@ -15,6 +15,8 @@ import os
 
 from dotenv import load_dotenv
 from checker.handwriting import as_written
+from checker.chart import recalled, with_chart
+from checker.voice import spoken
 from openai import OpenAI
 
 load_dotenv()
@@ -30,18 +32,45 @@ A computer algebra system has already checked their work and found the step
 wrong. That verdict is correct and final. Never question it, never suggest the
 step might be right, and never re-derive the answer to check.
 
-Say what they appear to have done, and what to look at next. Rules:
+Say what is wrong and what to look at next. Rules:
 - At most two short sentences. This appears in a small note on their page.
 - Speak to them as "you", warmly and plainly.
 - Write maths the way it is written on paper: 2x = 8. No LaTeX, no
   backslashes, no dollar signs. The note has no way to render them.
 - Do not give away the answer, and do not write out the corrected step.
-- Point at the specific slip if you can see one, for example doing something
-  to one side of the equation and not the other.
+
+About naming what they did wrong. Only say they did a particular thing if the
+numbers actually show it. You are not watching them work. You have the line
+before, the line after, and whatever they jotted in the margin, and that is
+all. Before writing "you subtracted 5 from one side only", do that yourself and
+check it gives their line exactly. If it does not, it is not what happened.
+
+When they have jotted the move in the margin, that is the move they believe
+they made, and it is the thing to talk about. "+ 4  + 4" under both sides says
+they meant to add 4 to each. Take them at their word and say what that move
+really does to their line: added to a left side of x^2 + 4 it gives x^2 + 8,
+not x^2. Now they know why the move was the wrong one, which is the thing they
+are actually stuck on.
+
+Do not describe their line back to them instead. "Your left side lost 4" is
+true of what is written and false of what they did, and someone who knows they
+added 4 to both sides reads it as being told they did something they did not,
+stops trusting you, and goes looking for a mistake that is not there.
+
+Where nothing was jotted, you have only the two lines, so stay with them: what
+changed on the left, and what changed on the right.
+
+When nothing you try reproduces their line, do not invent a reason. Say plainly
+what does not add up, which number changed and what it would have to be, and
+send them back to that step. A student told confidently that they did
+something they did not do stops trusting you, and starts hunting for a mistake
+that is not there.
 """.strip()
 
 
-def explain(question, previous_line, wrong_line, reason=None):
+def explain(
+    question, previous_line, wrong_line, reason=None, notes=None, style=None, history=None
+):
     """
     Say in a sentence or two what went wrong, or None if we can't.
 
@@ -65,15 +94,31 @@ def explain(question, previous_line, wrong_line, reason=None):
             # the answers. The checker already knows; passing it on stops the
             # explanation being about the wrong thing.
             f"What the checker found: this step {reason}" if reason else "",
+            # The "-5" and "/2" people write under an equation are not steps
+            # and never reach the checker, but they are the clearest evidence
+            # there is of what the student meant to do. Without them the model
+            # is reduced to guessing at intent from the numbers alone, and it
+            # guesses confidently and wrongly.
+            "What they jotted in the margin: " + ", ".join(notes) if notes else "",
+            recalled(history),
         ]
     ).strip()
 
     try:
         reply = OpenAI(api_key=api_key).responses.create(
             model=MODEL,
-            instructions=INSTRUCTIONS,
+            instructions=spoken(with_chart(INSTRUCTIONS, history), style),
             input=student_work,
-            max_output_tokens=120,
+            # Two sentences need a fraction of this. The rest is thinking room:
+            # checking a guess against the numbers before writing it down costs
+            # tokens, and a budget that only covers the answer buys silence —
+            # the whole allowance goes on reasoning and nothing comes back.
+            #
+            # Raised once the checking was asked for side by side, which is more
+            # thinking than it was before. At 500 the sentence came back cut off
+            # partway through, which reads worse on the page than a blunter one
+            # that finishes.
+            max_output_tokens=900,
         )
         # This sentence is written onto the page in a stroke font, which has no
         # way to draw a backslash. The model is told to keep away from LaTeX,

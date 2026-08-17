@@ -1,5 +1,11 @@
 import Foundation
 
+// Where the server lives.
+//
+// Set StepOutServer in Info.plist to a hosted https address and the app talks
+// to that from anywhere. Leave it empty while building and it falls back to
+// the Mac on this Wi-Fi.
+//
 // The simulator shares the Mac's network, so localhost works there.
 //
 // A real iPad is a separate machine and has to be told where the Mac is. By
@@ -10,11 +16,19 @@ import Foundation
 // It must be the same Wi-Fi, and some guest and campus networks stop devices
 // talking to each other at all, in which case nothing here will help.
 // Check the name with: scutil --get LocalHostName
-#if targetEnvironment(simulator)
-let serverAddress = "http://localhost:8000"
-#else
-let serverAddress = "http://MacBook-Pro-4.local:8000"
-#endif
+let serverAddress: String = {
+    let hosted = Bundle.main.object(forInfoDictionaryKey: "StepOutServer") as? String
+
+    if let hosted, !hosted.trimmingCharacters(in: .whitespaces).isEmpty {
+        return hosted.trimmingCharacters(in: .whitespaces)
+    }
+
+    #if targetEnvironment(simulator)
+    return "http://localhost:8000"
+    #else
+    return "http://MacBook-Pro-4.local:8000"
+    #endif
+}()
 
 // MARK: - What we send when the student writes by hand
 
@@ -32,25 +46,42 @@ struct RowData: Codable {
 struct HandwritingRequest: Codable {
     let rows: [RowData]
 
-    // Which problem the student is on, so the server can catch a first line
-    // that doesn't match the question.
-    let problemIndex: Int?
+    // The question this page is marked against, so the server can catch a
+    // first line that doesn't follow from it. Nil for a page with no question
+    // on it, where we only check that each line follows the one above.
+    var problemText: String? = nil
 
-    // The question itself. Problems read off a photographed worksheet are not
-    // in the server's list, so there is no index that would find them, and
-    // sending the wording is the only way to be marked against it.
-    let problemEquation: String?
+    // How the student wants to be spoken to.
+    var style: String? = nil
+
+    // What the tutor knows about them from before today.
+    var history: [String]? = nil
+
+    // Questions on this page that have already been answered once, so the
+    // server can pass over ink it has read before.
+    var answered: [String]? = nil
 }
 
-/// A photograph of work done on real paper.
 struct PhotoRequest: Codable {
-    // Sent inside the JSON rather than as a file upload, so a photograph
-    // travels the same way everything else does and there is only one piece of
-    // networking code to keep working.
-    let imageBase64: String
+    let image: String
 
-    let mediaType: String
-    let problemIndex: Int?
+    // What the student wants done with the page, in their words. Empty means
+    // they didn't say, and the page itself has to suggest what it is for.
+    let instruction: String?
+}
+
+/// What came back from a photographed page: a sheet of notes to print on it,
+/// questions to work through, or both.
+struct PageReading: Codable {
+    let sheet: NoteSheet?
+    let problems: [Problem]
+
+    /// Why nothing came back, when the fault was the server's rather than the
+    /// photograph's. Nil means the picture was read — an empty reading then
+    /// really is a page with nothing on it to teach from, and saying so is
+    /// the truth. Saying so when the server never reached the model is not,
+    /// and it sends someone off to photograph the same page again.
+    var trouble: String?
 }
 
 // MARK: - Talking to the server
@@ -66,8 +97,9 @@ private func post<Reply: Decodable>(path: String, jsonBody: Data) async throws -
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = jsonBody
 
-    // Handwriting has to travel to MyScript and back, so allow extra time.
-    request.timeoutInterval = 30
+    // Handwriting travels to MyScript and back, and a photographed page is
+    // read and then taught from, which takes longer still.
+    request.timeoutInterval = 120
 
     let (data, _) = try await URLSession.shared.data(for: request)
 
@@ -98,51 +130,61 @@ func checkSteps(_ steps: [String]) async throws -> CheckResult {
     return try await post(path: "/check", jsonBody: body)
 }
 
+/// Asking for a lesson: what went wrong, and how to talk about it.
+///
+/// `HelpContext` arrives from the server and goes back out again; the voice is
+/// the student's own setting and is added here rather than kept on it.
+struct LessonRequest: Codable {
+    let wrongLine: String
+    let question: String?
+    let previousLine: String?
+    let reason: String?
+    let style: String?
+    let history: [String]?
+
+    init(_ help: HelpContext, style: String, history: [String]) {
+        wrongLine = help.wrongLine
+        question = help.question
+        previousLine = help.previousLine
+        reason = help.reason
+        self.style = style
+        self.history = history
+    }
+}
+
 /// Send handwriting to be read and checked.
 func checkHandwriting(
     _ rows: [RowData],
-    problemIndex: Int?,
-    problemEquation: String?
+    problemText: String?,
+    style: String,
+    history: [String],
+    answered: [String]
 ) async throws -> CheckResult {
     try await post(
         path: "/check-handwriting",
         body: HandwritingRequest(
             rows: rows,
-            problemIndex: problemIndex,
-            problemEquation: problemEquation
+            problemText: problemText,
+            style: style,
+            history: history,
+            answered: answered
         )
     )
 }
 
-/// Send a photograph of working to be read and checked.
+/// Send a photograph of a page, and say what to do with it.
 ///
-/// Given longer than a written check: the picture has to travel, be read, and
-/// then be marked, and a photograph is a great deal more to send than a list
-/// of coordinates.
-func checkPhoto(_ jpeg: Data, problemIndex: Int?) async throws -> CheckResult {
-    let encoder = JSONEncoder()
-    encoder.keyEncodingStrategy = .convertToSnakeCase
-
-    let body = try encoder.encode(
-        PhotoRequest(
-            imageBase64: jpeg.base64EncodedString(),
-            mediaType: "image/jpeg",
-            problemIndex: problemIndex
+/// Both lists can come back empty, and that is an ordinary answer rather than
+/// a failure: the picture may have been of a blurred desk, or of a page with
+/// nothing on it this app knows how to teach or mark.
+func readPhoto(_ jpeg: Data, asking instruction: String?) async throws -> PageReading {
+    try await post(
+        path: "/read-photo",
+        body: PhotoRequest(
+            image: jpeg.base64EncodedString(),
+            instruction: instruction
         )
     )
-
-    var request = URLRequest(url: URL(string: serverAddress + "/check-photo")!)
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.httpBody = body
-    request.timeoutInterval = 60
-
-    let (data, _) = try await URLSession.shared.data(for: request)
-
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-
-    return try decoder.decode(CheckResult.self, from: data)
 }
 
 /// Read handwriting as words rather than as algebra.
@@ -150,18 +192,14 @@ func checkPhoto(_ jpeg: Data, problemIndex: Int?) async throws -> CheckResult {
 /// For the moments the tutor has asked something and is waiting to be
 /// answered. Read as algebra, "yes" comes back as y times e times s.
 func readWords(_ rows: [RowData]) async throws -> [String] {
-    let reply: WordsReply = try await post(path: "/read-words", body: HandwritingRequest(
-        rows: rows,
-        problemIndex: nil,
-        problemEquation: nil
-    ))
+    let reply: WordsReply = try await post(path: "/read-words", body: HandwritingRequest(rows: rows))
 
     return reply.words
 }
 
 /// Ask for a short lesson about a mistake.
-func fetchLesson(for help: HelpContext) async throws -> Lesson {
-    try await post(path: "/lesson", body: help)
+func fetchLesson(for help: HelpContext, style: String, history: [String]) async throws -> Lesson {
+    try await post(path: "/lesson", body: LessonRequest(help, style: style, history: history))
 }
 
 /// Ask a question the student wrote, and get a short answer back.
@@ -173,39 +211,4 @@ func fetchAnswer(to question: Question) async throws -> String {
 /// Ask for an example worked through, in answer to a question.
 func fetchWorkedExample(for question: Question) async throws -> Lesson {
     try await post(path: "/work-through", body: question)
-}
-
-/// Read the questions off a photographed worksheet.
-///
-/// Comes back in the same shape as the built-in problems, so everything that
-/// already lists and sets a problem carries on working without knowing where
-/// this one came from.
-func fetchProblemsFromPhoto(_ jpeg: Data) async throws -> [Problem] {
-    let encoder = JSONEncoder()
-    encoder.keyEncodingStrategy = .convertToSnakeCase
-
-    let body = try encoder.encode(
-        PhotoRequest(
-            imageBase64: jpeg.base64EncodedString(),
-            mediaType: "image/jpeg",
-            problemIndex: nil
-        )
-    )
-
-    var request = URLRequest(url: URL(string: serverAddress + "/problems-from-photo")!)
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.httpBody = body
-    request.timeoutInterval = 60
-
-    let (data, _) = try await URLSession.shared.data(for: request)
-
-    return try JSONDecoder().decode(ProblemList.self, from: data).problems
-}
-
-/// Ask the server for every problem, so the sidebar can list them.
-func fetchProblems() async throws -> [Problem] {
-    let url = URL(string: serverAddress + "/problems")!
-    let (data, _) = try await URLSession.shared.data(from: url)
-    return try JSONDecoder().decode(ProblemList.self, from: data).problems
 }

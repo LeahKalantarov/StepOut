@@ -140,38 +140,80 @@ extension PKCanvasView {
     }
 
     /// Group writing into side-by-side columns.
+    ///
+    /// Being wrong here is expensive in one direction only. Splitting a page
+    /// that holds a single piece of working throws most of it away, because
+    /// only the last column is read — so the test for a second column has to
+    /// be one that ordinary indented working cannot accidentally pass.
     func inkColumns(pageWidth: CGFloat) -> [InkColumn] {
         let lines = writtenLines()
         guard !lines.isEmpty else { return [] }
 
-        let pageMid = pageWidth / 2
-        let left = lines.filter { $0.bounds.midX < pageMid }
-        let right = lines.filter { $0.bounds.midX >= pageMid }
-
-        if !left.isEmpty, !right.isEmpty {
-            return [
-                InkColumn(lines: left.sorted { $0.lineNumber < $1.lineNumber }),
-                InkColumn(lines: right.sorted { $0.lineNumber < $1.lineNumber }),
-            ]
-        }
-
-        // Fall back to stroke-gap clustering when both sides sit near the middle.
-        var clusters: [[WrittenLine]] = []
-        var clusterStarts: [CGFloat] = []
+        // Measured against how far right the group already reaches, not where
+        // it began. People indent each step a little further in than the last,
+        // and by the bottom of a worked answer that drift is wider than any
+        // gap worth calling a column.
+        var groups: [[WrittenLine]] = []
 
         for line in lines.sorted(by: { $0.bounds.minX < $1.bounds.minX }) {
-            let start = line.bounds.minX
-            if let last = clusterStarts.last, start - last <= columnGap {
-                clusters[clusters.count - 1].append(line)
+            let reach = groups.last?.map(\.bounds.maxX).max()
+
+            if let reach, line.bounds.minX - reach <= columnGap {
+                groups[groups.count - 1].append(line)
             } else {
-                clusterStarts.append(start)
-                clusters.append([line])
+                groups.append([line])
             }
         }
 
-        return clusters.map { cluster in
-            InkColumn(lines: cluster.sorted { $0.lineNumber < $1.lineNumber })
+        // Left with groups separated by real blank paper. Only the ones
+        // written *alongside* each other are columns; the rest is one piece of
+        // working that wandered right, and belongs back together.
+        var columns: [[WrittenLine]] = []
+
+        for group in groups {
+            if let previous = columns.last, !alongside(previous, group) {
+                columns[columns.count - 1] = previous + group
+            } else {
+                columns.append(group)
+            }
         }
+
+        return columns.map { column in
+            InkColumn(lines: column.sorted { $0.lineNumber < $1.lineNumber })
+        }
+    }
+
+    /// Whether two groups of writing were written side by side.
+    ///
+    /// Two columns share ruled lines — that is what makes them columns rather
+    /// than one thing after another. Writing that only starts where the other
+    /// finished is the same work continuing, however far right it has crept.
+    private func alongside(_ first: [WrittenLine], _ second: [WrittenLine]) -> Bool {
+        let lines = Set(first.map(\.lineNumber))
+
+        return second.contains { lines.contains($0.lineNumber) }
+    }
+
+    /// How far right the student's ink reaches on each ruled line.
+    ///
+    /// Every line the writing touches, not just the one it is nearest to, so
+    /// that tall writing is not written over by something placed against the
+    /// line below it.
+    func inkEdges() -> [Int: CGFloat] {
+        var edges: [Int: CGFloat] = [:]
+
+        for written in writtenLines() {
+            let first = Int(written.bounds.minY / NotebookLayout.lineHeight)
+            let last = Int(written.bounds.maxY / NotebookLayout.lineHeight)
+
+            guard first <= last, last - first < 40 else { continue }
+
+            for line in first...last {
+                edges[line] = max(edges[line] ?? 0, written.bounds.maxX)
+            }
+        }
+
+        return edges
     }
 
     /// Cut one row of writing wherever it leaves a wide blank space.
@@ -275,6 +317,30 @@ extension PKCanvasView {
                 x: stroke.x.map { $0 - smallestX },
                 y: stroke.y.map { $0 - smallestY }
             )
+        }
+    }
+}
+
+extension [PKStroke] {
+    /// Sample these strokes into the coordinates the server reads.
+    ///
+    /// For short pieces of writing — a reply to the tutor, an instruction
+    /// about a photo — where, unlike the student's working, there is no need
+    /// to work out which line each stroke sits on.
+    func asCoordinates() -> [StrokeData] {
+        compactMap { stroke in
+            var xs: [Double] = []
+            var ys: [Double] = []
+
+            for point in stroke.path.interpolatedPoints(by: .distance(2)) {
+                let location = point.location.applying(stroke.transform)
+                xs.append(location.x)
+                ys.append(location.y)
+            }
+
+            // Two points at the least. A stray dot is not writing, and the
+            // recognizer cannot do anything with one.
+            return xs.count >= 2 ? StrokeData(x: xs, y: ys) : nil
         }
     }
 }
