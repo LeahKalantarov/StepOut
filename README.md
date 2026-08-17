@@ -123,7 +123,7 @@ app no longer needs the Mac.
 cd backend && python test_checker.py
 ```
 
-111 assertions over the checker: linear and quadratic working, invented and lost
+159 assertions over the checker: linear and quadratic working, invented and lost
 solutions, identities and contradictions, restarts, mis-copied questions, which
 questions are safe to set from a photo, and turning what the recognizer returns
 into something readable.
